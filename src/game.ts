@@ -63,6 +63,16 @@ export interface Particle {
   size: number;
 }
 
+/** A short sprite animation: smoke puffs, impact sparks and level-up rings. */
+export interface Effect {
+  kind: "poof" | "spark" | "ring";
+  x: number;
+  y: number;
+  t: number;
+  dur: number;
+  scale: number;
+}
+
 export interface DamageNumber {
   x: number;
   y: number;
@@ -77,7 +87,7 @@ export interface GameEvents {
   gameOver(): void;
 }
 
-const HASH_CELL = 24;
+const HASH_CELL = 32;
 const hashKey = (cx: number, cy: number) => (cx + 32768) * 65536 + (cy + 32768);
 
 function compact<T extends { dead: boolean }>(arr: T[]) {
@@ -94,17 +104,18 @@ export class Game {
   over = false;
   hitstop = 0;
   shake = 0;
-  viewW = CFG.minViewW;
-  viewH = CFG.minViewH;
+  viewW = 400;
+  viewH = 240;
   /** Movement input, length 0..1. */
   input = { x: 0, y: 0 };
 
-  player = { x: 0, y: 0, vx: 0, vy: 0, hp: CFG.player.maxHp, maxHp: CFG.player.maxHp, inv: 0, moving: false };
+  player = { x: 0, y: 0, vx: 0, vy: 0, hp: CFG.player.maxHp, maxHp: CFG.player.maxHp, inv: 0, moving: false, face: 1, walkT: 0 };
   enemies: Enemy[] = [];
   shots: Shot[] = [];
   gems: Gem[] = [];
   dice: DiePickup[] = [];
   parts: Particle[] = [];
+  fx: Effect[] = [];
   nums: DamageNumber[] = [];
   bag = new Bag();
 
@@ -171,6 +182,8 @@ export class Game {
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     p.moving = moving;
+    if (this.input.x !== 0) p.face = this.input.x > 0 ? 1 : -1;
+    if (moving) p.walkT += dt;
     p.inv = Math.max(0, p.inv - dt);
   }
 
@@ -180,11 +193,12 @@ export class Game {
     p.inv = CFG.player.iframes;
     this.shake = 3;
     this.hitstop = 0.05;
-    this.burst(p.x, p.y - 6, "#ff3d4a", 8, 60);
+    this.burst(p.x, p.y - 12, "#ff3d4a", 10, 70);
     if (p.hp <= 0) {
       p.hp = 0;
       this.over = true;
-      this.burst(p.x, p.y - 6, "#3d7dff", 24, 90);
+      this.burst(p.x, p.y - 12, "#4a85e6", 30, 100);
+      this.effect("poof", p.x, p.y - 10, 1.6, 0.6);
       this.events.gameOver();
     }
   }
@@ -325,8 +339,9 @@ export class Game {
       return;
     }
     const st = this.stats;
-    const ox = p.x;
-    const oy = p.y - 7;
+    // Fireballs leave from the orb on top of the staff.
+    const ox = p.x + 8 * p.face;
+    const oy = p.y - 18;
     const aim = Math.atan2(best.y - oy, best.x - ox);
     const n = st.count;
     const spread = (fb.spreadDeg * Math.PI) / 180;
@@ -364,7 +379,8 @@ export class Game {
         if ((e.x - s.x) ** 2 + (e.y - s.y) ** 2 > rs * rs) return;
         s.hit.push(e);
         this.damage(e, s.damage, s.vx, s.vy);
-        this.burst(s.x, s.y, "#ff7a1a", 4, 50);
+        this.burst(s.x, s.y, "#ffa424", 4, 60);
+        this.effect("spark", s.x, s.y, 1, 0.16);
         if (s.pierce-- <= 0) s.dead = true;
       });
     }
@@ -377,7 +393,7 @@ export class Game {
     const kb = CFG.fireball.knockback * (e.kind === "king" ? 0.15 : 1);
     e.kx += (dirX / len) * kb;
     e.ky += (dirY / len) * kb;
-    this.nums.push({ x: e.x, y: e.y - e.r - 6, value: Math.max(1, Math.round(amount)), t: 0, big: e.kind === "king" });
+    this.nums.push({ x: e.x, y: e.y - e.r * 2 - 4, value: Math.max(1, Math.round(amount)), t: 0, big: e.kind === "king" });
     if (e.hp <= 0) this.kill(e);
   }
 
@@ -386,14 +402,16 @@ export class Game {
     this.kills++;
     const color = CFG.enemies[e.kind].color;
     if (e.kind === "king") {
-      this.burst(e.x, e.y, color, 30, 110);
+      this.burst(e.x, e.y - 12, color, 40, 130);
+      this.effect("poof", e.x, e.y - 14, 2.4, 0.6);
       this.shake = 4;
       this.hitstop = 0.08;
       for (let i = 0; i < 8; i++) this.dropGem(e.x + (Math.random() - 0.5) * 24, e.y + (Math.random() - 0.5) * 24, 5);
       this.dropDie(e.x, e.y, pickDie(CFG.dice.kingWeights));
       return;
     }
-    this.burst(e.x, e.y, color, 8, 70);
+    this.burst(e.x, e.y - e.r, color, 10, 80);
+    this.effect("poof", e.x, e.y - e.r, e.kind === "skel" ? 1.1 : 0.9, 0.42);
     this.dropGem(e.x, e.y, e.xp);
     if (Math.random() < CFG.dice.dropChance) this.dropDie(e.x, e.y, pickDie(CFG.dice.weights));
   }
@@ -411,7 +429,7 @@ export class Game {
   private pull(o: { x: number; y: number; magnet: boolean; sp: number }, dt: number): boolean {
     const p = this.player;
     const dx = p.x - o.x;
-    const dy = p.y - 4 - o.y;
+    const dy = p.y - 8 - o.y;
     const d = Math.hypot(dx, dy) || 1;
     if (!o.magnet && d < CFG.player.pickupRadius) o.magnet = true;
     if (!o.magnet) return false;
@@ -439,7 +457,8 @@ export class Game {
       if (this.pull(d, dt)) {
         if (this.bag.add(makeDie(d.faces))) {
           d.dead = true;
-          this.burst(d.x, d.y, "#ffd23d", 12, 60);
+          this.burst(d.x, d.y, "#ffd640", 16, 70);
+          this.effect("ring", this.player.x, this.player.y - 10, 1, 0.4);
           this.events.toast(`Picked up a d${d.faces}! Open your bag to roll it.`, "gold");
           this.events.bagChanged();
         } else {
@@ -456,9 +475,10 @@ export class Game {
       this.xp -= this.xpNeeded;
       this.level++;
       const p = this.player;
-      for (let i = 0; i < 20; i++) {
-        const a = (i / 20) * Math.PI * 2;
-        this.parts.push({ x: p.x, y: p.y - 6, vx: Math.cos(a) * 80, vy: Math.sin(a) * 80, life: 0.4, max: 0.4, color: "#3df0ff", size: 2 });
+      this.effect("ring", p.x, p.y - 10, 1.6, 0.5);
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2;
+        this.parts.push({ x: p.x, y: p.y - 10, vx: Math.cos(a) * 90, vy: Math.sin(a) * 90, life: 0.45, max: 0.45, color: i % 2 ? "#46d6f0" : "#c6fbff", size: 2 });
       }
       this.events.toast(`Level ${this.level}! Fireball damage +${Math.round(CFG.fireball.damagePerLevel * 100)}%`, "good");
     }
@@ -475,7 +495,17 @@ export class Game {
     }
   }
 
+  effect(kind: Effect["kind"], x: number, y: number, scale: number, dur: number) {
+    this.fx.push({ kind, x, y, t: 0, dur, scale });
+  }
+
   private updateFx(dt: number) {
+    let k = 0;
+    for (const f of this.fx) {
+      f.t += dt;
+      if (f.t < f.dur) this.fx[k++] = f;
+    }
+    this.fx.length = k;
     const drag = Math.exp(-5 * dt);
     let j = 0;
     for (const pt of this.parts) {

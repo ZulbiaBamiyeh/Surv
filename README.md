@@ -43,4 +43,13 @@ Every number that affects feel or balance is in [`src/config.ts`](src/config.ts)
 | `src/backpack.ts` | The backpack screen: dragging, rolling, sockets |
 | `src/inventory.ts` | Backpack grid and item data, Fireball stats |
 | `src/dice.ts` | Die types, drop odds, rolling |
-| `src/sprites.ts` | Pixel art, palette and pixel font |
+| `src/art/palette.ts` | Color ramps for every material |
+| `src/art/painter.ts` | The shading tool: lit shapes snapped onto color ramps, plus automatic outlines |
+| `src/art/characters.ts` | Wizard, slimes, King Slime, bats and skeletons, with animation frames |
+| `src/art/items.ts` | Gems, fireballs, dice, the scroll, smoke and sparks |
+| `src/art/world.ts` | Endless ground and props (trees, bushes, rocks, mushrooms, stumps) |
+| `src/art/font.ts` | Pixel font for damage numbers |
+
+## Art
+
+All art is generated in code at startup. Each sprite is built from shapes that are lit from the top left and then mapped onto hand-picked color ramps, so everything shares the same lighting and palette. To inspect the art up close, run `npm run dev` and open `/art-preview.html` (add `?z=10` to zoom).

@@ -6,28 +6,27 @@ export type EnemyKind = "slime" | "bat" | "skel" | "king";
 export const CFG = {
   /** Simulation step in seconds. Game logic runs at a fixed rate regardless of frame rate. */
   tick: 1 / 120,
-  /** Minimum game view in art pixels. The view grows to fill wider screens. */
-  minViewW: 320,
-  minViewH: 180,
+  /** Roughly how many art pixels fit across the screen's shorter side. */
+  viewShortSide: 240,
 
   player: {
-    speed: 82,
+    speed: 100,
     /** High acceleration and friction keep movement snappy rather than floaty. */
     accel: 1500,
     friction: 1800,
     maxHp: 100,
-    radius: 5,
+    radius: 6,
     /** Invulnerability after being hit, in seconds. */
     iframes: 0.6,
-    pickupRadius: 30,
+    pickupRadius: 38,
   },
 
   fireball: {
     cooldown: 0.8,
     damage: 10,
-    speed: 200,
+    speed: 235,
     life: 1.0,
-    radius: 3,
+    radius: 4,
     /** How many enemies one fireball can pass through before vanishing. */
     pierce: 1,
     knockback: 80,
@@ -35,7 +34,7 @@ export const CFG = {
     spreadDeg: 14,
     fullCircleDeg: 300,
     /** Only casts when an enemy is within this distance. */
-    range: 180,
+    range: 220,
     /** Each pip in the Speed socket makes casting this much faster (0.08 = 8%). */
     speedPerPip: 0.08,
     /** Damage bonus per level gained. */
@@ -43,10 +42,10 @@ export const CFG = {
   },
 
   enemies: {
-    slime: { hp: 10, speed: 30, damage: 8, radius: 5, xp: 1, color: "#ff8ad8" },
-    bat: { hp: 6, speed: 52, damage: 5, radius: 4, xp: 1, color: "#b05aff" },
-    skel: { hp: 32, speed: 24, damage: 12, radius: 5, xp: 3, color: "#ffffff" },
-    king: { hp: 240, speed: 22, damage: 20, radius: 10, xp: 0, color: "#ffd23d" },
+    slime: { hp: 10, speed: 36, damage: 8, radius: 8, xp: 1, color: "#ff83c0" },
+    bat: { hp: 6, speed: 62, damage: 5, radius: 6, xp: 1, color: "#9658d4" },
+    skel: { hp: 32, speed: 29, damage: 12, radius: 7, xp: 3, color: "#d4d2e2" },
+    king: { hp: 240, speed: 26, damage: 20, radius: 17, xp: 0, color: "#ffd640" },
   } satisfies Record<EnemyKind, { hp: number; speed: number; damage: number; radius: number; xp: number; color: string }>,
 
   spawn: {

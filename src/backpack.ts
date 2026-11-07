@@ -2,7 +2,7 @@ import { CFG } from "./config";
 import { rollDie } from "./dice";
 import type { Game } from "./game";
 import { DieItem, Item, NumberItem, SocketKey, makeNumber } from "./inventory";
-import { ROWS, dieColor, dieSprite, makeSprite, spriteURL } from "./sprites";
+import { Art, dieColor, spriteURL } from "./art";
 
 type From = { type: "grid" } | { type: "socket"; key: SocketKey };
 
@@ -33,15 +33,19 @@ export class BackpackUI {
   private stats: HTMLElement;
   private drag: Drag | null = null;
   private rolling = new Set<number>();
-  private scrollImg = spriteURL(makeSprite(ROWS.scroll), 6);
+  private scrollImg: string;
+  private dieImg = new Map<number, string>();
   private justRolled: number | null = null;
 
   constructor(
+    art: Art,
     public game: Game,
     private toast: (msg: string, kind?: "good" | "warn" | "gold") => void,
     private onChange: () => void,
     private onClose: () => void,
   ) {
+    this.scrollImg = spriteURL(art.scroll, 6);
+    for (const [faces, spr] of art.dice) this.dieImg.set(faces, spriteURL(spr, 5));
     const cols = CFG.bag.cols;
     const rows = CFG.bag.rows;
     this.root = document.createElement("div");
@@ -61,7 +65,7 @@ export class BackpackUI {
         <div class="bag-right">
           <div class="scroll-card">
             <div class="scroll-head">
-              <img src="${this.scrollImg}" alt="" class="px" width="72" height="84">
+              <img src="${this.scrollImg}" alt="" class="px" width="66" height="78">
               <div><h3>Fireball</h3><p>Shoots at the nearest enemy all by itself.</p></div>
             </div>
             <div class="sockets"></div>
@@ -140,7 +144,7 @@ export class BackpackUI {
       el.title = "Fireball scroll";
     } else if (it.kind === "die") {
       el.style.setProperty("--die", dieColor(it.faces));
-      el.innerHTML = `<img src="${spriteURL(dieSprite(it.faces), 4)}" alt="" class="px"><span class="label">d${it.faces}</span><span class="roll-num" hidden></span>`;
+      el.innerHTML = `<img src="${this.dieImg.get(it.faces)}" alt="" class="px"><span class="label">d${it.faces}</span><span class="roll-num" hidden></span>`;
       el.title = `d${it.faces}: tap to roll 1 to ${it.faces}`;
       el.setAttribute("aria-label", `d${it.faces} die, tap to roll`);
       if (this.rolling.has(it.id)) el.classList.add("rolling");

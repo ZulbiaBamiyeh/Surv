@@ -2,12 +2,21 @@ import "./style.css";
 import { BackpackUI } from "./backpack";
 import { CFG } from "./config";
 import { pickDie } from "./dice";
+import { spriteURL } from "./art";
 import { Game } from "./game";
 import { Joystick, Renderer } from "./render";
 
 const app = document.getElementById("app")!;
 app.innerHTML = `
   <canvas id="game" aria-label="Game"></canvas>
+  <div class="topbar">
+    <div class="xp"><div class="xp-fill"></div></div>
+    <div class="topbar-row">
+      <span class="chip level">LV <b>1</b></span>
+      <span class="timer">0:00</span>
+      <span class="chip kills"><i aria-hidden="true"></i><b>0</b></span>
+    </div>
+  </div>
   <div class="hud">
     <button class="btn bag-btn" type="button" aria-label="Open backpack">
       Bag <kbd>Tab</kbd><span class="badge" hidden></span>
@@ -15,8 +24,10 @@ app.innerHTML = `
   </div>
   <div class="toasts" aria-live="polite"></div>
   <div class="intro panel">
-    <b>Move</b> with WASD, the arrow keys, or by dragging on the screen.
-    Fireball casts by itself. You start with a <b>d6</b>: press <kbd>Tab</kbd> to open your bag and roll it.
+    <span class="keys-only"><b>Move</b> with WASD or the arrow keys.
+    Fireball casts by itself. You start with a <b>d6</b>: press <kbd>Tab</kbd> to open your bag and roll it.</span>
+    <span class="touch-only"><b>Drag</b> anywhere to move. Fireball casts by itself.
+    You start with a <b>d6</b>: tap <b>Bag</b> to roll it.</span>
   </div>
   <div class="overlay over-overlay" hidden>
     <div class="panel over-panel">
@@ -33,6 +44,22 @@ const badge = app.querySelector<HTMLElement>(".badge")!;
 const intro = app.querySelector<HTMLElement>(".intro")!;
 const overEl = app.querySelector<HTMLElement>(".over-overlay")!;
 const overStats = app.querySelector<HTMLElement>(".over-stats")!;
+const xpFill = app.querySelector<HTMLElement>(".xp-fill")!;
+const levelEl = app.querySelector<HTMLElement>(".level b")!;
+const timerEl = app.querySelector<HTMLElement>(".timer")!;
+const killsEl = app.querySelector<HTMLElement>(".kills b")!;
+let hudCache = "";
+function updateHud() {
+  const sec = Math.floor(game.time);
+  const xp = Math.round((game.xp / game.xpNeeded) * 200);
+  const key = `${sec}|${game.level}|${game.kills}|${xp}`;
+  if (key === hudCache) return;
+  hudCache = key;
+  xpFill.style.width = xp / 2 + "%";
+  levelEl.textContent = String(game.level);
+  timerEl.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  killsEl.textContent = String(game.kills);
+}
 
 // ---------- Toasts ----------
 
@@ -40,8 +67,8 @@ function toast(msg: string, kind?: "good" | "warn" | "gold") {
   const el = document.createElement("div");
   el.className = "toast" + (kind ? " " + kind : "");
   el.textContent = msg;
-  toastsEl.prepend(el);
-  while (toastsEl.children.length > 4) toastsEl.lastElementChild!.remove();
+  toastsEl.append(el);
+  while (toastsEl.children.length > 3) toastsEl.firstElementChild!.remove();
   window.setTimeout(() => el.classList.add("out"), 2600);
   window.setTimeout(() => el.remove(), 3000);
 }
@@ -60,8 +87,9 @@ const events = {
 
 let game = new Game(events);
 const renderer = new Renderer();
-const bag = new BackpackUI(game, toast, () => updateBadge(), () => toggleBag(false));
+const bag = new BackpackUI(renderer.art, game, toast, () => updateBadge(), () => toggleBag(false));
 app.appendChild(bag.root);
+app.querySelector<HTMLElement>(".kills i")!.style.backgroundImage = `url(${spriteURL(renderer.art.slime[0], 2)})`;
 
 function updateBadge() {
   const n = game.bag.unrolledDice;
@@ -169,8 +197,9 @@ function resize() {
   const dpr = window.devicePixelRatio || 1;
   const W = Math.round(window.innerWidth * dpr);
   const H = Math.round(window.innerHeight * dpr);
-  // The largest whole-number scale that still shows at least the minimum view.
-  scale = Math.max(1, Math.floor(Math.min(W / CFG.minViewW, H / CFG.minViewH)));
+  // A whole-number scale picked from the screen's shorter side, so phones held
+  // upright zoom in as much as landscape screens do.
+  scale = Math.max(1, Math.floor(Math.min(W, H) / CFG.viewShortSide));
   canvas.width = W;
   canvas.height = H;
   canvas.style.width = window.innerWidth + "px";
@@ -205,6 +234,7 @@ function frame(now: number) {
     intro.classList.add("out");
   }
   renderer.draw(ctx, game, scale, now / 1000, joy);
+  updateHud();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

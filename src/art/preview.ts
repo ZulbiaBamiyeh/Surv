@@ -1,5 +1,4 @@
 // Dev-only sprite sheet: open /art-preview.html on the dev server to inspect the art up close.
-import { heroineFrame } from "./heroine";
 import { batFrame, heroFrame, kingFrame, skeletonFrame, slimeFrame } from "./characters";
 import { dieSprite, fireballFrame, gearSprite, gemSprite, poofFrames, rockSprite, scrollSprite } from "./items";
 import type { Sprite } from "./painter";
@@ -8,7 +7,6 @@ import { groundChunk, makePropKit } from "./world";
 
 const kit = makePropKit();
 const rows: Sprite[][] = [
-  [0, 1, 2, 3].map((i) => heroineFrame(i / 4, "idle")).concat([0, 1, 2, 3, 4, 5, 6, 7].map((i) => heroineFrame(i / 8, "run")), [heroineFrame(0, "dash")]),
   [0, 1, 2, 3].map((i) => heroFrame(i / 4, false)).concat([0, 1, 2, 3, 4, 5].map((i) => heroFrame(i / 6, true))),
   [0, 1, 2, 3, 4, 5].map((i) => slimeFrame(i / 6)).concat([0, 1, 2].map((i) => kingFrame(i / 3))),
   [0, 1, 2, 3].map((i) => batFrame(i / 4)).concat([0, 1, 2, 3].map((i) => skeletonFrame(i / 4))),

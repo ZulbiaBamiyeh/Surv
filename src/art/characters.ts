@@ -16,76 +16,98 @@ function eye(p: Painter, x: number, y: number, tall = false, color = OUTLINE) {
   }
 }
 
-// ---------- Hero: a little wizard ----------
+// ---------- Hero: a bunny wizard ----------
 
+const FUR: Ramp = ["#5e4e66", "#9c8ca6", "#d6cade", "#f3edf5", "#ffffff"];
+const ROBE: Ramp = ["#120e2a", "#231d55", "#36318e", "#5554c4", "#8a92ee"];
+const EAR_PINK = "#f2a6c0";
+const SOFT_EYE = "#4a3c58";
+
+/**
+ * A fluffy bunny in a star-spangled robe with a small wizard hat between its ears and a
+ * crescent-moon staff. Faces right; the renderer mirrors it for left.
+ */
 export function heroFrame(phase: number, walking: boolean): Sprite {
-  const p = new Painter(28, 34);
+  const p = new Painter(34, 46);
   const t = phase * TAU;
   const swing = walking ? Math.sin(t) : 0;
-  const by = walking ? (Math.abs(Math.sin(t)) > 0.6 ? 1 : 0) : phase >= 0.5 ? 1 : 0;
+  const by = walking ? (Math.abs(Math.cos(t)) > 0.7 ? 1 : 0) : phase >= 0.5 ? 1 : 0;
   const R = RAMPS;
-  const cx = 13;
+  const cx = 16;
+  const ground = 43.5;
 
-  // Feet
-  const lift = (s: number) => (walking && s > 0.3 ? 1 : 0);
-  p.ellipsoid(cx - 2.2 + swing * 2, 31.6 - lift(Math.cos(t)), 2.3, 1.5, R.leather, { bias: -0.1 });
-  p.ellipsoid(cx + 2.2 - swing * 2, 31.6 - lift(-Math.cos(t)), 2.3, 1.5, R.leather);
+  // Feet peeking out under the robe
+  const lift = (s: number) => (walking && s > 0.35 ? 1 : 0);
+  p.ellipsoid(cx - 3.2 + swing * 2, ground - lift(Math.cos(t)), 2.8, 1.5, FUR, { bias: -0.12 });
+  p.ellipsoid(cx + 3.2 - swing * 2, ground - lift(-Math.cos(t)), 2.8, 1.5, FUR);
+
+  // Tail pom behind the robe
+  p.ellipsoid(cx - 8.4, 35 + by, 2.6, 2.4, FUR, { spec: 0.95 });
 
   // Back arm
-  p.ellipsoid(cx - 4.8, 24.6 + by - swing * 0.6, 2, 2.9, R.robe, { bias: -0.15 });
+  p.ellipsoid(cx - 5.4, 31 + by - swing * 0.6, 2.1, 3.1, ROBE, { bias: -0.15 });
 
-  // Robe, flaring toward the hem, with a gold trim
-  const y0 = 20.5 + by;
-  const y1 = 31.2;
-  const hem = (x: number) => 30.9 + 0.45 * Math.sin(x * 1.1 + t * 2);
-  const rad = (y: number) => 4 + ((y - y0) / (y1 - y0)) * 3.4;
-  p.column(y0, y1, () => cx, rad, R.robe, { clip: (x, y) => y <= hem(x), bias: -0.02 });
-  p.column(y0, y1, () => cx, rad, R.gold, { clip: (x, y) => y <= hem(x) && y > hem(x) - 1.1 });
-  // A center seam and soft folds
-  for (let y = Math.ceil(y0 + 2); y < 30; y++) p.nudge(cx, y, -1);
-  for (let y = 27; y < 30; y++) p.nudge(cx - 3, y, -1);
+  // Robe: flares toward a gently swaying hem with a gold trim and stitched stars
+  const y0 = 27.5 + by;
+  const y1 = 42.6;
+  const hem = (x: number) => 42.2 + 0.5 * Math.sin(x * 1.1 + t * 2);
+  const rad = (y: number) => 4.6 + ((y - y0) / (y1 - y0)) * 3.8;
+  p.column(y0, y1, () => cx, rad, ROBE, { clip: (x, y) => y <= hem(x) });
+  p.column(y0, y1, () => cx, rad, R.gold, { clip: (x, y) => y <= hem(x) && y > hem(x) - 1.2 });
+  for (const [sx, sy] of [[cx - 3, 33], [cx + 2, 36], [cx - 1, 39], [cx + 4, 31]] as [number, number][]) {
+    p.dot(sx, sy + by, R.gold[4], R.gold);
+  }
+  p.dot(cx - 3, 32 + by, R.gold[2], R.gold);
+  p.dot(cx + 2, 35 + by, R.gold[2], R.gold);
+  // A soft fold down the middle
+  for (let y = Math.ceil(y0 + 3); y < 41; y++) p.nudge(cx + 1, y, -1);
 
-  // Staff with a glowing orb
-  p.rod(22.5, 17 + by, 22.5, 32.6, 0.95, R.wood);
-  p.ellipsoid(22.5, 15 + by, 2.6, 2.6, R.magic, { spec: 0.88, sep: 0.25 });
-  p.dot(21, 17 + by, R.gold[3], R.gold);
-  p.dot(24, 17 + by, R.gold[2], R.gold);
+  // Staff with a glowing crescent moon
+  p.rod(cx + 9, 24 + by, cx + 9, 44, 0.9, R.wood);
+  p.ellipsoid(cx + 9, 19.6 + by, 3.6, 3.6, R.magic, { spec: 0.85, sep: 0.25 });
+  for (let y = 0; y < 46; y++)
+    for (let x = 0; x < 34; x++)
+      if (Math.hypot(x + 0.5 - (cx + 11.4), y + 0.5 - (18.2 + by)) < 2.9) p.erase(x, y);
 
-  // Front arm and hand gripping the staff
-  p.ellipsoid(cx + 4.6, 24.2 + by + swing * 0.6, 2.1, 2.9, R.robe, { sep: 0.16 });
-  p.ellipsoid(21.2, 26.2 + by + swing * 0.6, 1.7, 1.6, R.skin, { sep: 0.2, bias: 0.08, floor: 0.45 });
+  // Front arm and paw on the staff
+  p.ellipsoid(cx + 5.6, 31 + by + swing * 0.6, 2.2, 3.1, ROBE, { sep: 0.16 });
+  p.ellipsoid(cx + 8, 33.2 + by + swing * 0.6, 1.9, 1.8, FUR, { sep: 0.2, bias: 0.1 });
 
-  // Hair behind the head frames the face, then the head, then bangs
-  p.ellipsoid(cx, 16 + by, 7.6, 6.2, R.hair, { bias: -0.05 });
-  p.ellipsoid(cx + 0.6, 17 + by, 6.4, 5.8, R.skin, { sep: 0.12, bias: 0.14, floor: 0.5 });
-  p.ellipsoid(cx, 12.6 + by, 6.8, 2.1, R.hair, { sep: 0.15 });
+  // Fluffy collar
+  p.ellipsoid(cx, 27.5 + by, 5.6, 2, FUR, { sep: 0.18, bias: 0.06 });
 
-  // Hat brim, casting a soft shadow
-  p.ellipsoid(cx, 11 + by, 10.2, 2.4, R.hat, { sep: 0.2, bias: 0.02 });
-  // Hat cone, its tip flopping backward
-  const top = by;
-  const bot = 10.6 + by;
+  // Ears: the left stands tall, the right flops at the tip and bounces as it walks
+  const bounce = walking ? Math.max(0, Math.cos(t * 2)) * 1.2 : Math.sin(t) * 0.5;
+  p.rod(cx - 3, 16 + by, cx - 4.4, 3.5 + by, 2.3, FUR, { bias: -0.04 });
+  p.rod(cx - 3.1, 14.5 + by, cx - 4.2, 5.5 + by, 0.9, [EAR_PINK, EAR_PINK, EAR_PINK]);
+  p.rod(cx + 3, 16 + by, cx + 4.6, 7 + by, 2.3, FUR);
+  p.rod(cx + 4.6, 7 + by, cx + 8.4, 9.5 + by + bounce, 1.9, FUR, { bias: -0.06 });
+  p.rod(cx + 3.2, 14.5 + by, cx + 4.4, 8.5 + by, 0.9, [EAR_PINK, EAR_PINK, EAR_PINK]);
+
+  // Head with round cheeks
+  p.ellipsoid(cx - 4.4, 23.8 + by, 2.6, 2.3, FUR, { bias: 0.04 });
+  p.ellipsoid(cx + 4.4, 23.8 + by, 2.6, 2.3, FUR);
+  p.ellipsoid(cx, 21 + by, 6.9, 6.1, FUR, { sep: 0.2, spec: 0.97, floor: 0.4 });
+
+  // A little wizard hat perched between the ears, tipped to one side
+  p.ellipsoid(cx + 0.5, 15.6 + by, 5.2, 1.5, ROBE, { sep: 0.25 });
+  const top = 5 + by;
+  const bot = 15.2 + by;
   const s = (y: number) => Math.max(0, Math.min(1, (y - top) / (bot - top)));
-  const cc = (y: number) => cx + 5.6 * (1 - s(y)) ** 2;
-  const cr = (y: number) => 0.6 + 5.6 * s(y) ** 0.85;
-  p.column(top, bot, cc, cr, R.hat, { tilt: -0.35 });
-  p.column(8.5 + by, 10.1 + by, cc, (y) => cr(y) + 0.2, R.gold, { tilt: -0.3 });
-  // Star on the hat
-  const sx = 12;
-  const sy = 5 + by;
-  p.dot(sx, sy - 1, R.gold[4], R.gold);
-  p.dot(sx - 1, sy, R.gold[3], R.gold);
-  p.dot(sx, sy, R.gold[4], R.gold);
-  p.dot(sx + 1, sy, R.gold[3], R.gold);
-  p.dot(sx, sy + 1, R.gold[2], R.gold);
+  p.column(top, bot, (y) => cx + 0.5 + 3.4 * (1 - s(y)) ** 1.6, (y) => 0.4 + 3.6 * s(y) ** 0.9, ROBE, { tilt: -0.3 });
+  p.column(13.4 + by, 14.8 + by, (y) => cx + 0.5 + 3.4 * (1 - s(y)) ** 1.6, (y) => 0.6 + 3.6 * s(y) ** 0.9, R.gold, { tilt: -0.2 });
+  p.dot(cx + 2, 10 + by, R.gold[4], R.gold);
+  p.dot(cx + 3, 10 + by, R.gold[3], R.gold);
+  p.dot(cx + 2, 9 + by, R.gold[3], R.gold);
 
-  // Face
-  eye(p, 12, 16 + by, true);
-  eye(p, 16, 16 + by, true);
-  p.dot(10, 19 + by, R.blush[1]);
-  p.dot(11, 19 + by, R.blush[2]);
-  p.dot(18, 19 + by, R.blush[1]);
-  p.dot(15, 19 + by, R.skin[1]);
+  // A soft, simple face: two gentle eyes, blush and a tiny nose
+  p.dot(cx - 2, 21 + by, SOFT_EYE);
+  p.dot(cx - 2, 22 + by, SOFT_EYE);
+  p.dot(cx + 3, 21 + by, SOFT_EYE);
+  p.dot(cx + 3, 22 + by, SOFT_EYE);
+  p.dot(cx - 4, 24 + by, R.blush[2]);
+  p.dot(cx + 5, 24 + by, R.blush[2]);
+  p.dot(cx + 1, 24 + by, EAR_PINK);
   return p.bake();
 }
 

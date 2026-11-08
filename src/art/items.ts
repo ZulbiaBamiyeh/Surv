@@ -193,7 +193,7 @@ export function dieSprite(faces: number): Sprite {
 
 // ---------- Scrolls ----------
 
-export type Emblem = "fire" | "frost" | "zap" | "bonk" | "poison" | "ward" | "mend";
+export type Emblem = "fire" | "frost" | "zap" | "bonk" | "poison" | "ward" | "mend" | "moon";
 
 const SEALS: Record<Emblem, Ramp> = {
   fire: RAMPS.red,
@@ -203,6 +203,7 @@ const SEALS: Record<Emblem, Ramp> = {
   poison: ["#0f2a14", "#1e5a24", "#3a9a2a", "#7ad040", "#c8f080"],
   ward: RAMPS.magic,
   mend: RAMPS.gemPink,
+  moon: RAMPS.gold,
 };
 
 function emblem(p: Painter, kind: Emblem, cx: number, cy: number) {
@@ -230,6 +231,10 @@ function emblem(p: Painter, kind: Emblem, cx: number, cy: number) {
     p.dot(cx, cy, "#ffffff", ice);
   } else if (kind === "zap") {
     p.poly([[cx + 1, cy - 6], [cx - 3.5, cy + 0.8], [cx - 0.2, cy + 0.8], [cx - 1.5, cy + 6.2], [cx + 3.6, cy - 1], [cx + 0.4, cy - 1], [cx + 2.2, cy - 6]], R.gold, 0.66, { sep: 0.45 });
+  } else if (kind === "moon") {
+    p.ellipsoid(cx, cy, 4.6, 4.6, MOON, { spec: 0.9, sep: 0.35 });
+    for (let y = 0; y < p.h; y++)
+      for (let x = 0; x < p.w; x++) if (Math.hypot(x + 0.5 - (cx + 2.4), y + 0.5 - (cy - 1.6)) < 3.6) p.erase(x, y);
   } else if (kind === "bonk") {
     p.ellipsoid(cx - 1.5, cy + 1, 3.6, 3, R.stone, { spec: 0.95, sep: 0.35 });
     p.ellipsoid(cx + 2.5, cy - 2, 2.2, 2, R.stone, { sep: 0.2, spec: 0.95 });
@@ -466,3 +471,17 @@ export function sparkFrames(): HTMLCanvasElement[] {
 }
 
 export const INK = OUTLINE;
+
+const MOON: Ramp = ["#5a4a2a", "#a8905a", "#e8d48a", "#fff2b0", "#fffbe6"];
+
+/** A little moon for Moon Orbs: pale and cratered, with a soft highlight. */
+export function moonSprite(big: boolean): Sprite {
+  const r = big ? 7 : 4.2;
+  const S = Math.ceil(r * 2 + 1);
+  const p = new Painter(S, S);
+  const c = S / 2;
+  p.ellipsoid(c, c, r, r, MOON, { spec: 0.92 });
+  const craters: [number, number, number][] = big ? [[0.3, 0.2, 1.6], [-0.35, 0.35, 1.1], [0.1, -0.4, 0.9]] : [[0.3, 0.25, 0.9], [-0.3, 0.1, 0.7]];
+  for (const [u, v, cr] of craters) p.ellipsoid(c + u * r, c + v * r, cr, cr, MOON, { bias: -0.35 });
+  return p.bake();
+}

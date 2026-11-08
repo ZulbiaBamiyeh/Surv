@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -6,15 +5,8 @@ export default defineConfig({
   build: {
     target: "es2022",
     rollupOptions: {
-      input: {
-        main: resolve(__dirname, "index.html"),
-        demo: resolve(__dirname, "demo.html"),
-        style: resolve(__dirname, "style-test.html"),
-        iso: resolve(__dirname, "iso.html"),
-        side: resolve(__dirname, "side.html"),
-      },
       output: {
-        entryFileNames: (chunk) => (chunk.name === "main" ? "game.js" : "[name].js"),
+        entryFileNames: "game.js",
         chunkFileNames: "[name].js",
         assetFileNames: "[name][extname]",
       },

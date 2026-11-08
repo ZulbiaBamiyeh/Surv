@@ -1,7 +1,7 @@
 import { batFrame, heroFrame, kingFrame, skeletonFrame, slimeFrame } from "./characters";
-import { Emblem, dieSprite, fireballFrame, gearSprite, gemSprite, glowSprite, poofFrames, rockSprite, scrollSprite, shadowSprite, sparkFrames } from "./items";
-import { GEAR, GearId, SCROLLS, ScrollId } from "../content";
-import { DIE_RAMPS, RAMPS } from "./palette";
+import { Emblem, fireballFrame, gemSprite, glowSprite, moonSprite, poofFrames, scrollSprite, shadowSprite, sparkFrames } from "./items";
+import { ALL_SCROLLS, ScrollId } from "../content";
+import { RAMPS } from "./palette";
 import type { Sprite } from "./painter";
 import { CHUNK, PlacedProp, PropKit, chunkProps, groundChunk, makePropKit } from "./world";
 
@@ -10,15 +10,13 @@ export type { Sprite } from "./painter";
 export const FIRE_DIRS = 16;
 
 const EMBLEMS: Record<ScrollId, Emblem> = {
-  fireball: "fire", frost: "frost", zap: "zap", orbit: "bonk", puddle: "poison", ward: "ward", mend: "mend",
+  fire: "fire", frost: "frost", storm: "zap", moon: "moon", toxic: "poison", light: "mend",
 };
 
 /** All game art, generated once at startup. */
 export function buildArt() {
   const range = (n: number) => Array.from({ length: n }, (_, i) => i);
   const fire: Sprite[][] = range(FIRE_DIRS).map((d) => range(3).map((f) => fireballFrame((d / FIRE_DIRS) * Math.PI * 2, f)));
-  const dice = new Map<number, Sprite>();
-  for (const f of [3, 4, 6, 8, 10, 12, 20]) dice.set(f, dieSprite(f));
   const shadows = new Map<number, HTMLCanvasElement>();
   return {
     heroIdle: range(4).map((i) => heroFrame(i / 4, false)),
@@ -32,17 +30,16 @@ export function buildArt() {
     fire,
     fireGlow: glowSprite(11, "#ff7a1a"),
     goldGlow: glowSprite(12, "#ffd640"),
-    orbGlow: glowSprite(7, "#46d6f0"),
+    orbGlow: glowSprite(8, "#8ae8ff"),
     poof: poofFrames(7, 18),
     spark: sparkFrames(),
-    scrolls: new Map(
-      (Object.keys(SCROLLS) as ScrollId[]).map((id) => [id, scrollSprite(EMBLEMS[id])] as const),
-    ),
-    gear: new Map((Object.keys(GEAR) as GearId[]).map((id) => [id, gearSprite(id)] as const)),
-    rock: rockSprite(),
+    scrolls: new Map(ALL_SCROLLS.map((id) => [id, scrollSprite(EMBLEMS[id])] as const)),
+    moon: moonSprite(false),
+    bigMoon: moonSprite(true),
+    moonGlow: glowSprite(9, "#fff2b0"),
+    lootGlow: glowSprite(14, "#ffd0f0"),
     iceGlow: glowSprite(8, "#8fd8ff"),
     zapGlow: glowSprite(9, "#ffe46a"),
-    dice,
     shadow(w: number) {
       let s = shadows.get(w);
       if (!s) shadows.set(w, (s = shadowSprite(w)));
@@ -53,7 +50,6 @@ export function buildArt() {
 
 export type Art = ReturnType<typeof buildArt>;
 
-export const dieColor = (faces: number) => (DIE_RAMPS[faces] ?? RAMPS.ivory)[3];
 
 /** Ground and props, generated chunk by chunk as the camera moves. */
 export class WorldArt {

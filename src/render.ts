@@ -88,15 +88,26 @@ export class Renderer {
         img(sp, gem.x - 1, gem.y - s.h - 1);
       }
     }
-    for (const d of g.dice) {
-      const s = A.dice.get(d.faces)!;
+    // Scroll pickups: a sealed scroll bobbing in a pink glow
+    for (const d of g.loot) {
+      const s = A.scrolls.get("light")!;
       const bob = Math.round(Math.sin(realTime * 4) * 2);
       ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = 0.55 + Math.sin(realTime * 6) * 0.2;
-      img(A.goldGlow, d.x - A.goldGlow.width / 2, d.y - 10 - A.goldGlow.height / 2 + bob);
+      ctx.globalAlpha = 0.6 + Math.sin(realTime * 6) * 0.25;
+      img(A.lootGlow, d.x - A.lootGlow.width / 2, d.y - 14 - A.lootGlow.height / 2 + bob);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
       img(s.n, d.x - s.w / 2, d.y - s.h - 2 + bob);
+    }
+
+    // Blizzard: a cold, snowy disc around the player
+    if (g.blizzard > 0) {
+      ctx.globalAlpha = 0.16 + Math.sin(realTime * 3) * 0.04;
+      ctx.fillStyle = "#cfefff";
+      ctx.beginPath();
+      ctx.ellipse(R(p.x - camX), R(p.y - 8 - camY), g.blizzard, g.blizzard * 0.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
 
     // ---------- Death puffs, under the living so they never hide the wizard ----------
@@ -135,18 +146,49 @@ export class Renderer {
     // ---------- Fireballs ----------
     ctx.globalCompositeOperation = "lighter";
     ctx.globalAlpha = 0.6;
-    for (const s of g.shots) img(A.fireGlow, s.x - A.fireGlow.width / 2, s.y - A.fireGlow.height / 2);
+    for (const s of g.shots) {
+      if (s.kind === "icicle") continue;
+      const k = s.kind === "orb" ? 2 : 1;
+      img(A.fireGlow, s.x - A.fireGlow.width * k / 2, s.y - A.fireGlow.height * k / 2, A.fireGlow.width * k, A.fireGlow.height * k);
+    }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
     for (const s of g.shots) {
       const a = Math.atan2(s.vy, s.vx);
+      if (s.kind === "icicle") {
+        // A short spike of ice pointing where it flies
+        const len = 7;
+        ctx.strokeStyle = "#2490d0";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(R(s.x - Math.cos(a) * len - camX), R(s.y - Math.sin(a) * len - camY));
+        ctx.lineTo(R(s.x - camX), R(s.y - camY));
+        ctx.stroke();
+        ctx.strokeStyle = "#e8f8ff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        continue;
+      }
       const dir = ((Math.round((a / (Math.PI * 2)) * FIRE_DIRS) % FIRE_DIRS) + FIRE_DIRS) % FIRE_DIRS;
       const fr = A.fire[dir][Math.floor(realTime * 14 + s.x * 0.05) % 3];
-      img(fr.n, s.x - fr.w / 2, s.y - fr.h / 2);
+      const k = s.kind === "orb" ? 2 : 1;
+      img(fr.n, s.x - (fr.w * k) / 2, s.y - (fr.h * k) / 2, fr.w * k, fr.h * k);
     }
 
     // ---------- Orbit rocks, frost novas, lightning ----------
-    for (const r of g.rocks) img(A.rock.n, r.x - A.rock.w / 2, r.y - A.rock.h / 2);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.45;
+    for (const m of g.moons) {
+      const gl = A.moonGlow;
+      const k = m.big ? 1.6 : 1;
+      img(gl, m.x - (gl.width * k) / 2, m.y - (gl.height * k) / 2, gl.width * k, gl.height * k);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    for (const m of g.moons) {
+      const s = m.big ? A.bigMoon : A.moon;
+      img(s.n, m.x - s.w / 2, m.y - s.h / 2);
+    }
     for (const n of g.novas) {
       if (n.t < 0) continue;
       const k = Math.min(1, n.t / 0.35);
@@ -187,6 +229,23 @@ export class Renderer {
       } else if (f.kind === "spark") {
         const fr = A.spark[Math.min(2, Math.floor(k * 3))];
         img(fr, f.x - 2, f.y - 2);
+      } else if (f.kind === "blast") {
+        const r = (8 + k * 22) * f.scale;
+        ctx.globalAlpha = (1 - k) * 0.5;
+        ctx.fillStyle = "#ffa424";
+        ctx.beginPath();
+        ctx.arc(R(f.x - camX), R(f.y - camY), r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1 - k;
+        ctx.strokeStyle = "#ffe46a";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      } else if (f.kind === "freeze") {
+        ctx.globalAlpha = (1 - k) * 0.35;
+        ctx.fillStyle = "#bfe8ff";
+        ctx.fillRect(0, 0, vw, vh);
+        ctx.globalAlpha = 1;
       } else {
         ctx.globalAlpha = 1 - k;
         ctx.strokeStyle = f.kind === "heal" ? "#b8f080" : "#c6fbff";
@@ -203,7 +262,7 @@ export class Renderer {
       const pop = n.t < 0.06 ? 3 : n.t < 0.12 ? 1 : 0;
       const [col, sh] = NUMBER_COLORS[n.style];
       const c = numberSprite(String(n.value), col, sh);
-      const sc = n.style === "big" || n.style === "heal" ? 2 : 1;
+      const sc = n.style === "big" || n.style === "heal" || n.style === "max" ? 2 : 1;
       ctx.globalAlpha = n.t > 0.5 ? 1 - (n.t - 0.5) / 0.2 : 1;
       img(c, n.x - (c.width * sc) / 2, n.y - n.t * 22 - pop, c.width * sc, c.height * sc);
       ctx.globalAlpha = 1;
@@ -344,7 +403,7 @@ export class Renderer {
     ctx.globalCompositeOperation = "lighter";
     ctx.globalAlpha = 0.35 + Math.sin(realTime * 5) * 0.12;
     const og = A.orbGlow;
-    ctx.drawImage(og, R(p.x + 8 * p.face - og.width / 2 - camX), R(p.y - 18 - og.height / 2 - camY));
+    ctx.drawImage(og, R(p.x + 9 * p.face - og.width / 2 - camX), R(p.y - 24 - og.height / 2 - camY));
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
     if (p.ward > 0) {
@@ -389,10 +448,11 @@ export class Renderer {
       frames = A.slime;
       speed = 8;
     }
-    const s = frames[Math.floor(t * speed + e.phase * 3) % frames.length];
+    // Frozen enemies stop animating
+    const s = frames[e.freezeT > 0 ? 0 : Math.floor(t * speed + e.phase * 3) % frames.length];
     const left = g.player.x < e.x;
     let c = e.flash > 0 ? (left ? s.fl : s.f) : left ? s.nl : s.n;
-    if (e.chillT > 0 && e.flash <= 0) c = tinted(c);
+    if ((e.chillT > 0 || e.freezeT > 0) && e.flash <= 0) c = tinted(c);
     const dx = R(e.x - s.w / 2 - camX);
     const dy = R(e.y - s.h + 3 - lift - camY);
     ctx.drawImage(c, dx, dy);
@@ -443,11 +503,11 @@ export class Renderer {
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(j.ox, j.oy, 18, 0, Math.PI * 2);
+    ctx.arc(j.ox, j.oy, 26, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillStyle = "#ffffff";
     ctx.beginPath();
-    ctx.arc(j.x, j.y, 7, 0, Math.PI * 2);
+    ctx.arc(j.x, j.y, 10, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
   }
@@ -461,7 +521,8 @@ const NUMBER_COLORS: Record<DamageNumber["style"], [string, string]> = {
   hit: ["#ffffff", "#c8c8dc"],
   big: ["#ffe46a", "#ffa424"],
   burn: ["#ffa424", "#f05a1a"],
-  heal: ["#c8f080", "#7ad040"],
+  heal: ["#ffd0f0", "#e080b0"],
+  max: ["#ffe46a", "#ffa424"],
 };
 
 const tintCache = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();

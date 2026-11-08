@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Rootfall</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&display=swap" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="loading">Growing the roots…</div>
+    <div class="hud">
+      <div class="bars">
+        <div class="hp"><i></i><span></span></div>
+        <div class="dashbar"><i></i></div>
+      </div>
+      <div class="kills"><b>0</b> banished</div>
+      <div class="help">
+        <span class="keys-only"><b>← →</b> run · <b>Space</b> or <b>Alt</b> jump, again in the air · <b>Shift</b> dash · <b>↓ + jump</b> drop down · long falls hurt</span>
+      </div>
+      <div class="touch">
+        <div class="pad"><button class="tb left" type="button" aria-label="Left">◀</button><button class="tb down" type="button" aria-label="Down">▼</button><button class="tb right" type="button" aria-label="Right">▶</button></div>
+        <div class="pad"><button class="tb dash" type="button">Dash</button><button class="tb jump" type="button">Jump</button></div>
+      </div>
+    </div>
+    <script type="module" src="/src/side/main.ts"></script>
+  </body>
+</html>

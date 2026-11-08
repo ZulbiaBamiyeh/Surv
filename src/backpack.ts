@@ -1,10 +1,11 @@
+import { Art, dieColor, spriteURL } from "./art";
 import { CFG } from "./config";
+import { GEAR, MAX_TIER, SCROLLS } from "./content";
 import { rollDie } from "./dice";
 import type { Game } from "./game";
-import { DieItem, Item, NumberItem, SocketKey, makeNumber } from "./inventory";
-import { Art, dieColor, spriteURL } from "./art";
+import { DieItem, GearItem, Item, NumberItem, ScrollItem, SocketKey, SpellStats, itemName, makeNumber } from "./inventory";
 
-type From = { type: "grid" } | { type: "socket"; key: SocketKey };
+type From = { type: "grid" } | { type: "pending" } | { type: "socket"; key: SocketKey };
 
 interface Drag {
   item: Item;
@@ -17,10 +18,7 @@ interface Drag {
   moved: boolean;
 }
 
-const SOCKETS: { key: SocketKey; label: string; help: string }[] = [
-  { key: "count", label: "Count", help: "Fireballs per cast" },
-  { key: "speed", label: "Speed", help: `+${Math.round(CFG.fireball.speedPerPip * 100)}% cast speed per pip` },
-];
+const ROMAN = ["", "I", "II", "III"];
 
 export class BackpackUI {
   readonly root: HTMLElement;
@@ -29,13 +27,13 @@ export class BackpackUI {
   private layer: HTMLElement;
   private ghost: HTMLElement;
   private trash: HTMLElement;
-  private sockets: HTMLElement;
-  private stats: HTMLElement;
+  private tray: HTMLElement;
+  private detail: HTMLElement;
   private drag: Drag | null = null;
   private rolling = new Set<number>();
-  private scrollImg: string;
-  private dieImg = new Map<number, string>();
+  private img = new Map<string, string>();
   private justRolled: number | null = null;
+  private selected: Item | null = null;
 
   constructor(
     art: Art,
@@ -44,8 +42,9 @@ export class BackpackUI {
     private onChange: () => void,
     private onClose: () => void,
   ) {
-    this.scrollImg = spriteURL(art.scroll, 6);
-    for (const [faces, spr] of art.dice) this.dieImg.set(faces, spriteURL(spr, 5));
+    for (const [id, spr] of art.scrolls) this.img.set(id, spriteURL(spr, 4));
+    for (const [id, spr] of art.gear) this.img.set(id, spriteURL(spr, 4));
+    for (const [faces, spr] of art.dice) this.img.set("d" + faces, spriteURL(spr, 5));
     const cols = CFG.bag.cols;
     const rows = CFG.bag.rows;
     this.root = document.createElement("div");
@@ -55,6 +54,10 @@ export class BackpackUI {
       <div class="panel bag-panel" role="dialog" aria-label="Backpack">
         <div class="bag-left">
           <div class="panel-head"><h2>Backpack</h2><span class="paused">Paused</span></div>
+          <div class="tray" hidden>
+            <span class="tray-label">New item. Drag it into your bag:</span>
+            <div class="tray-slot"></div>
+          </div>
           <div class="bag-grid" style="--cols:${cols};--rows:${rows}">
             ${'<div class="cell"></div>'.repeat(cols * rows)}
             <div class="drop-ghost" hidden></div>
@@ -63,18 +66,12 @@ export class BackpackUI {
           <div class="trash">Drop here to throw away</div>
         </div>
         <div class="bag-right">
-          <div class="scroll-card">
-            <div class="scroll-head">
-              <img src="${this.scrollImg}" alt="" class="px" width="66" height="78">
-              <div><h3>Fireball</h3><p>Shoots at the nearest enemy all by itself.</p></div>
-            </div>
-            <div class="sockets"></div>
-            <dl class="stats"></dl>
-          </div>
+          <div class="detail"></div>
           <ul class="help">
-            <li><b>Tap a die</b> to roll it. It turns into a number.</li>
-            <li><b>Drag a number</b> onto a socket. Putting a new number in a socket sends the old one back to your bag.</li>
-            <li>Bigger dice take up more space.</li>
+            <li><b>Tap</b> an item to see what it does. <b>Tap a die</b> to roll it.</li>
+            <li><b>Drag a number</b> onto a scroll or its sockets.</li>
+            <li><b>Drag two matching items together</b> to merge them into a stronger tier.</li>
+            <li>Gear marked <b>Touching</b> only boosts scrolls right next to it.</li>
           </ul>
         </div>
       </div>
@@ -83,8 +80,8 @@ export class BackpackUI {
     this.layer = this.root.querySelector(".bag-items")!;
     this.ghost = this.root.querySelector(".drop-ghost")!;
     this.trash = this.root.querySelector(".trash")!;
-    this.sockets = this.root.querySelector(".sockets")!;
-    this.stats = this.root.querySelector(".stats")!;
+    this.tray = this.root.querySelector(".tray")!;
+    this.detail = this.root.querySelector(".detail")!;
     this.root.querySelector(".close-btn")!.addEventListener("click", () => this.onClose());
     window.addEventListener("pointermove", (e) => this.onMove(e));
     window.addEventListener("pointerup", (e) => this.onUp(e));
@@ -94,6 +91,9 @@ export class BackpackUI {
   open() {
     this.isOpen = true;
     this.root.hidden = false;
+    const bag = this.game.bag;
+    if (bag.pending) this.selected = bag.pending;
+    else if (!this.selected || !bag.items.includes(this.selected)) this.selected = bag.scrolls[0] ?? null;
     this.render();
   }
 
@@ -101,33 +101,47 @@ export class BackpackUI {
     this.cancelDrag();
     this.isOpen = false;
     this.root.hidden = true;
+    if (this.game.bag.pending) this.toast(`Your ${itemName(this.game.bag.pending)} is waiting in your bag's tray.`, "warn");
   }
 
   render() {
     const bag = this.game.bag;
-    this.layer.replaceChildren(...bag.items.map((it) => this.itemEl(it, { type: "grid" })));
-    const scroll = bag.scroll;
-    this.sockets.replaceChildren(
-      ...SOCKETS.map(({ key, label, help }) => {
-        const wrap = document.createElement("div");
-        wrap.className = "socket";
-        wrap.dataset.socket = key;
-        const slot = document.createElement("div");
-        slot.className = "socket-slot";
-        const n = scroll.sockets[key];
-        if (n) slot.appendChild(this.itemEl(n, { type: "socket", key }));
-        else slot.innerHTML = `<span class="empty">${key === "count" ? "1" : "0"}</span>`;
-        wrap.innerHTML = `<span class="socket-label">${label}</span>`;
-        wrap.appendChild(slot);
-        wrap.insertAdjacentHTML("beforeend", `<span class="socket-help">${help}</span>`);
-        return wrap;
+    if (this.selected && !bag.items.includes(this.selected) && bag.pending !== this.selected) this.selected = bag.scrolls[0] ?? null;
+    const linked = this.linkedTo(this.selected);
+    this.layer.replaceChildren(
+      ...bag.items.map((it) => {
+        const el = this.itemEl(it, { type: "grid" });
+        if (it === this.selected) el.classList.add("selected");
+        if (linked.has(it)) el.classList.add("linked");
+        return el;
       }),
     );
-    const st = this.game.stats;
-    this.stats.innerHTML = `
-      <div><dt>Fireballs per cast</dt><dd>${st.count}</dd></div>
-      <div><dt>Time between casts</dt><dd>${st.cooldown.toFixed(2)}s</dd></div>
-      <div><dt>Damage each</dt><dd>${Math.round(st.damage)}</dd></div>`;
+    const slot = this.tray.querySelector(".tray-slot")!;
+    if (bag.pending) {
+      const el = this.itemEl(bag.pending, { type: "pending" });
+      el.style.width = `calc(var(--cell) * ${bag.pending.w})`;
+      el.style.height = `calc(var(--cell) * ${bag.pending.h})`;
+      slot.replaceChildren(el);
+      this.tray.hidden = false;
+    } else {
+      slot.replaceChildren();
+      this.tray.hidden = true;
+    }
+    this.renderDetail();
+  }
+
+  /** Items that the selected item boosts or is boosted by. */
+  private linkedTo(it: Item | null): Set<Item> {
+    const out = new Set<Item>();
+    if (!it || (it.kind !== "scroll" && it.kind !== "gear")) return out;
+    const bag = this.game.bag;
+    if (!bag.items.includes(it)) return out;
+    if (it.kind === "scroll") {
+      for (const g of bag.gear) if (GEAR[g.def].adjacent && bag.touching(it, g)) out.add(g);
+    } else if (GEAR[it.def].adjacent) {
+      for (const s of bag.scrolls) if (bag.touching(it, s)) out.add(s);
+    }
+    return out;
   }
 
   private itemEl(it: Item, from: From): HTMLElement {
@@ -139,12 +153,15 @@ export class BackpackUI {
       el.style.width = `calc(var(--cell) * ${it.w})`;
       el.style.height = `calc(var(--cell) * ${it.h})`;
     }
-    if (it.kind === "scroll") {
-      el.innerHTML = `<img src="${this.scrollImg}" alt="" class="px"><span class="label">Fireball</span>`;
-      el.title = "Fireball scroll";
+    if (it.kind === "scroll" || it.kind === "gear") {
+      const name = itemName(it);
+      const touching = it.kind === "gear" && GEAR[it.def].adjacent;
+      el.innerHTML = `<img src="${this.img.get(it.def)}" alt="" class="px">${it.tier > 1 ? `<span class="tier t${it.tier}">${ROMAN[it.tier]}</span>` : ""}${touching ? '<span class="touch-dot" title="Boosts touching scrolls"></span>' : ""}`;
+      el.title = name;
+      el.setAttribute("aria-label", `${name}, tier ${it.tier}`);
     } else if (it.kind === "die") {
       el.style.setProperty("--die", dieColor(it.faces));
-      el.innerHTML = `<img src="${this.dieImg.get(it.faces)}" alt="" class="px"><span class="label">d${it.faces}</span><span class="roll-num" hidden></span>`;
+      el.innerHTML = `<img src="${this.img.get("d" + it.faces)}" alt="" class="px"><span class="label">d${it.faces}</span><span class="roll-num" hidden></span>`;
       el.title = `d${it.faces}: tap to roll 1 to ${it.faces}`;
       el.setAttribute("aria-label", `d${it.faces} die, tap to roll`);
       if (this.rolling.has(it.id)) el.classList.add("rolling");
@@ -157,6 +174,65 @@ export class BackpackUI {
     }
     el.addEventListener("pointerdown", (e) => this.onDown(e, it, from, el));
     return el;
+  }
+
+  // ---------- Detail panel ----------
+
+  private renderDetail() {
+    const it = this.selected;
+    if (!it || it.kind === "die" || it.kind === "number") {
+      this.detail.innerHTML = `<div class="card"><p class="muted">Tap a scroll or piece of gear to see what it does.</p></div>`;
+      return;
+    }
+    if (it.kind === "gear") return this.renderGear(it);
+    this.renderScroll(it);
+  }
+
+  private tierLine(tier: number) {
+    return `<span class="stars" aria-label="Tier ${tier} of ${MAX_TIER}">${"★".repeat(tier)}<i>${"★".repeat(MAX_TIER - tier)}</i></span>`;
+  }
+
+  private renderGear(g: GearItem) {
+    const def = GEAR[g.def];
+    const bag = this.game.bag;
+    let where = "Works from anywhere in your bag.";
+    if (def.adjacent) {
+      const n = bag.items.includes(g) ? bag.scrolls.filter((s) => bag.touching(g, s)).length : 0;
+      where = n ? `Touching ${n} scroll${n > 1 ? "s" : ""} right now.` : "Not touching any scrolls yet. Move it next to one.";
+    }
+    this.detail.innerHTML = `
+      <div class="card">
+        <div class="card-head"><img src="${this.img.get(g.def)}" alt="" class="px icon"><div><h3>${def.name}</h3>${this.tierLine(g.tier)}</div></div>
+        <p>${def.desc}</p>
+        <p class="${def.adjacent ? "where" : "muted"}">${where}</p>
+      </div>`;
+  }
+
+  private renderScroll(s: ScrollItem) {
+    const def = SCROLLS[s.def];
+    const st = this.game.loadout.spells.find((x) => x.item === s);
+    const sockets = (["count", "speed"] as SocketKey[])
+      .map((key) => {
+        const label = key === "count" ? "Count" : "Speed";
+        const help = key === "count" ? def.countLabel : s.def === "orbit" ? "Spins 8% faster per pip" : "Casts 8% faster per pip";
+        return `<div class="socket" data-socket="${key}"><span class="socket-label">${label}</span><div class="socket-slot" data-slot="${key}"></div><span class="socket-help">${help}</span></div>`;
+      })
+      .join("");
+    const rows = st ? statRows(st) : [["Status", "Place it in your bag to use it"]];
+    this.detail.innerHTML = `
+      <div class="card">
+        <div class="card-head"><img src="${this.img.get(s.def)}" alt="" class="px icon tall"><div><h3>${def.name}</h3>${this.tierLine(s.tier)}</div></div>
+        <p>${def.desc}</p>
+        <div class="sockets">${sockets}</div>
+        <dl class="stats">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
+        ${st?.boosts.length ? `<p class="where">Boosted by ${[...new Set(st.boosts)].join(", ")}</p>` : ""}
+      </div>`;
+    for (const key of ["count", "speed"] as SocketKey[]) {
+      const slot = this.detail.querySelector(`[data-slot="${key}"]`)!;
+      const n = s.sockets[key];
+      if (n) slot.appendChild(this.itemEl(n, { type: "socket", key }));
+      else slot.innerHTML = `<span class="empty">–</span>`;
+    }
   }
 
   // ---------- Dragging ----------
@@ -179,7 +255,7 @@ export class BackpackUI {
       d.el.style.width = r.width + "px";
       d.el.style.height = r.height + "px";
       document.body.appendChild(d.el);
-      if (d.item.kind === "number") this.sockets.classList.add("drop-ready");
+      if (d.item.kind === "number") this.detail.querySelector(".sockets")?.classList.add("drop-ready");
       this.trash.classList.add("drop-ready");
     }
     d.el.style.left = e.clientX - d.offX + "px";
@@ -193,14 +269,28 @@ export class BackpackUI {
     return {
       x: Math.round((e.clientX - d.offX - g.left) / cell),
       y: Math.round((e.clientY - d.offY - g.top) / cell),
+      px: Math.floor((e.clientX - g.left) / cell),
+      py: Math.floor((e.clientY - g.top) / cell),
       inside: e.clientX >= g.left && e.clientX <= g.right && e.clientY >= g.top && e.clientY <= g.bottom,
     };
+  }
+
+  private itemAtCell(x: number, y: number, ignore?: Item): Item | undefined {
+    return this.game.bag.items.find((it) => it !== ignore && x >= it.x && x < it.x + it.w && y >= it.y && y < it.y + it.h);
   }
 
   private updateGhost(e: PointerEvent) {
     const d = this.drag!;
     const c = this.cellUnder(e, d);
+    this.layer.querySelectorAll(".merge-target").forEach((el) => el.classList.remove("merge-target"));
     if (!c.inside) {
+      this.ghost.hidden = true;
+      return;
+    }
+    const under = this.itemAtCell(c.px, c.py, d.item);
+    if (under && (this.game.bag.canMerge(d.item, under) || (d.item.kind === "number" && under.kind === "scroll"))) {
+      const idx = this.game.bag.items.indexOf(under);
+      this.layer.children[idx]?.classList.add("merge-target");
       this.ghost.hidden = true;
       return;
     }
@@ -218,23 +308,33 @@ export class BackpackUI {
     if (!d) return;
     this.drag = null;
     this.ghost.hidden = true;
-    this.sockets.classList.remove("drop-ready");
     this.trash.classList.remove("drop-ready");
     if (!d.moved) {
       if (d.item.kind === "die") this.roll(d.item);
-      else if (d.item.kind === "number") this.toast("Drag this number onto one of Fireball's sockets.");
+      else {
+        this.selected = d.item.kind === "number" ? this.selected : d.item;
+        if (d.item.kind === "number") this.toast("Drag this number onto a scroll.");
+        this.render();
+      }
       return;
     }
     d.el.remove();
     const target = document.elementFromPoint(e.clientX, e.clientY);
     const socketEl = target?.closest<HTMLElement>("[data-socket]");
-    if (socketEl && d.item.kind === "number") {
-      this.slot(d.item, d.from, socketEl.dataset.socket as SocketKey);
+    const c = this.cellUnder(e, d);
+    const under = c.inside ? this.itemAtCell(c.px, c.py, d.item) : undefined;
+    if (socketEl && d.item.kind === "number" && this.selected?.kind === "scroll") {
+      this.slot(d.item, d.from, this.selected, socketEl.dataset.socket as SocketKey);
     } else if (target?.closest(".trash")) {
       this.discard(d.item, d.from);
-    } else {
-      const c = this.cellUnder(e, d);
-      if (c.inside) this.moveToGrid(d.item, d.from, c.x, c.y);
+    } else if (under && d.item.kind === "number" && under.kind === "scroll") {
+      const key: SocketKey = !under.sockets.count ? "count" : !under.sockets.speed ? "speed" : "count";
+      this.slot(d.item, d.from, under, key);
+      this.selected = under;
+    } else if (under && (d.item.kind === "scroll" || d.item.kind === "gear") && (under.kind === "scroll" || under.kind === "gear") && this.game.bag.canMerge(d.item, under)) {
+      this.mergeInto(d.item, under);
+    } else if (c.inside) {
+      this.moveToGrid(d.item, d.from, c.x, c.y);
     }
     this.changed();
   }
@@ -249,47 +349,65 @@ export class BackpackUI {
 
   // ---------- Actions ----------
 
+  private detachFrom(item: Item, from: From) {
+    const bag = this.game.bag;
+    if (from.type === "socket" && this.selected?.kind === "scroll") this.selected.sockets[from.key] = null;
+    else if (from.type === "pending") bag.pending = null;
+    else bag.remove(item);
+  }
+
   private moveToGrid(item: Item, from: From, x: number, y: number) {
     const bag = this.game.bag;
     if (!bag.fits(item.w, item.h, x, y, item)) return;
-    if (from.type === "socket") bag.scroll.sockets[from.key] = null;
+    if (from.type === "socket" && this.selected?.kind === "scroll") this.selected.sockets[from.key] = null;
     bag.placeAt(item, x, y);
   }
 
-  private slot(item: NumberItem, from: From, key: SocketKey) {
+  private mergeInto(src: ScrollItem | GearItem, dst: ScrollItem | GearItem) {
     const bag = this.game.bag;
-    const scroll = bag.scroll;
+    if (bag.pending === src) bag.pending = null;
+    const loose = bag.merge(src, dst);
+    let lost = 0;
+    for (const n of loose) if (!bag.add(n)) lost++;
+    this.selected = dst;
+    this.toast(`${itemName(dst)} merged to tier ${ROMAN[dst.tier]}!`, "gold");
+    if (lost) this.toast("No room for a socketed number, so it was thrown away.", "warn");
+  }
+
+  private slot(item: NumberItem, from: From, scroll: ScrollItem, key: SocketKey) {
+    const bag = this.game.bag;
     const old = scroll.sockets[key];
     if (old === item) return;
-    if (from.type === "socket") {
-      // Moving between sockets swaps them.
+    if (from.type === "socket" && this.selected === scroll) {
       scroll.sockets[from.key] = old;
       scroll.sockets[key] = item;
     } else {
-      bag.remove(item);
+      this.detachFrom(item, from);
       scroll.sockets[key] = item;
       if (old && !bag.add(old)) this.toast(`No room for the old ${old.value}, so it was thrown away.`, "warn");
     }
-    const st = this.game.stats;
-    this.toast(
-      key === "count" ? (st.count === 1 ? "Fireball shoots 1 at a time." : `Fireball now shoots ${st.count} at once!`) : `Fireball now casts every ${st.cooldown.toFixed(2)}s!`,
-      "good",
-    );
+    this.game.refreshLoadout();
+    const def = SCROLLS[scroll.def];
+    this.toast(key === "count" ? `${def.name}: ${def.countLabel.toLowerCase()} set to ${item.value}.` : `${def.name} speed +${Math.round(item.value * CFG.speedPerPip * 100)}%.`, "good");
   }
 
   private discard(item: Item, from: From) {
-    if (item.kind === "scroll") {
-      this.toast("You need your Fireball scroll!", "warn");
+    const bag = this.game.bag;
+    if (item.kind === "scroll" && bag.scrolls.filter((s) => !SCROLLS[s.def].utility && s !== item).length === 0 && !SCROLLS[item.def].utility && from.type === "grid") {
+      this.toast("You need at least one attack scroll!", "warn");
       return;
     }
-    if (from.type === "socket") this.game.bag.scroll.sockets[from.key] = null;
-    else this.game.bag.remove(item);
+    this.detachFrom(item, from);
+    if (item.kind === "scroll") for (const n of Object.values(item.sockets)) if (n) bag.add(n);
   }
 
   private roll(die: DieItem) {
+    const bag = this.game.bag;
+    const fromTray = bag.pending === die;
     this.rolling.add(die.id);
     this.render();
-    const el = [...this.layer.children].find((c) => c.classList.contains("rolling")) as HTMLElement | undefined;
+    const host = fromTray ? this.tray : this.layer;
+    const el = host.querySelector<HTMLElement>(".rolling");
     const num = el?.querySelector<HTMLElement>(".roll-num");
     if (num) num.hidden = false;
     const iv = window.setInterval(() => {
@@ -299,10 +417,14 @@ export class BackpackUI {
       window.clearInterval(iv);
       this.rolling.delete(die.id);
       const value = rollDie(die.faces);
-      const bag = this.game.bag;
-      bag.remove(die);
       const n = makeNumber(value, die.faces);
-      bag.placeAt(n, die.x, die.y);
+      if (fromTray) {
+        bag.pending = null;
+        if (!bag.add(n)) bag.pending = n;
+      } else {
+        bag.remove(die);
+        bag.placeAt(n, die.x, die.y);
+      }
       this.justRolled = n.id;
       if (value === die.faces) this.toast(`MAX ROLL! ${value} on a d${die.faces}!`, "gold");
       else if (value === 1) this.toast(`Ouch, a 1 on a d${die.faces}.`, "warn");
@@ -313,7 +435,39 @@ export class BackpackUI {
   }
 
   private changed() {
+    this.game.refreshLoadout();
     if (this.isOpen) this.render();
     this.onChange();
   }
+}
+
+function statRows(st: SpellStats): [string, string][] {
+  const cd = `${st.cooldown.toFixed(2)}s`;
+  const dmg = String(Math.round(st.damage));
+  const rows: [string, string][] = [];
+  switch (st.item.def) {
+    case "fireball":
+      rows.push(["Fireballs per cast", String(st.count)], ["Time between casts", cd], ["Damage each", dmg]);
+      break;
+    case "frost":
+      rows.push(["Waves", String(st.count)], ["Time between casts", cd], ["Damage", dmg], ["Size", `${Math.round(st.area)}px`]);
+      break;
+    case "zap":
+      rows.push(["Enemies hit", String(st.count + 1)], ["Time between casts", cd], ["Damage each", dmg]);
+      break;
+    case "orbit":
+      rows.push(["Rocks", String(Math.max(1, st.count))], ["Spin speed", `+${Math.round(st.pips * CFG.speedPerPip * 100)}%`], ["Damage per hit", dmg]);
+      break;
+    case "puddle":
+      rows.push(["Puddles per cast", String(st.count)], ["Time between casts", cd], ["Damage per tick", dmg]);
+      break;
+    case "ward":
+      rows.push(["Bubble lasts", `${(3 + st.count * 0.5).toFixed(1)}s`], ["Every", cd]);
+      break;
+    case "mend":
+      rows.push(["Heals", `${Math.round((0.12 + st.count * 0.03) * 100)}% health`], ["Every", cd]);
+      break;
+  }
+  if (st.burn > 0) rows.push(["Burn", `${st.burn}/s for ${CFG.burnTime}s`]);
+  return rows;
 }

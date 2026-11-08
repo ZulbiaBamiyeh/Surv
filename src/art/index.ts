@@ -1,5 +1,6 @@
 import { batFrame, heroFrame, kingFrame, skeletonFrame, slimeFrame } from "./characters";
-import { dieSprite, fireballFrame, gemSprite, glowSprite, poofFrames, scrollSprite, shadowSprite, sparkFrames } from "./items";
+import { Emblem, dieSprite, fireballFrame, gearSprite, gemSprite, glowSprite, poofFrames, rockSprite, scrollSprite, shadowSprite, sparkFrames } from "./items";
+import { GEAR, GearId, SCROLLS, ScrollId } from "../content";
 import { DIE_RAMPS, RAMPS } from "./palette";
 import type { Sprite } from "./painter";
 import { CHUNK, PlacedProp, PropKit, chunkProps, groundChunk, makePropKit } from "./world";
@@ -7,6 +8,10 @@ import { CHUNK, PlacedProp, PropKit, chunkProps, groundChunk, makePropKit } from
 export type { Sprite } from "./painter";
 
 export const FIRE_DIRS = 16;
+
+const EMBLEMS: Record<ScrollId, Emblem> = {
+  fireball: "fire", frost: "frost", zap: "zap", orbit: "bonk", puddle: "poison", ward: "ward", mend: "mend",
+};
 
 /** All game art, generated once at startup. */
 export function buildArt() {
@@ -30,7 +35,13 @@ export function buildArt() {
     orbGlow: glowSprite(7, "#46d6f0"),
     poof: poofFrames(7, 18),
     spark: sparkFrames(),
-    scroll: scrollSprite(),
+    scrolls: new Map(
+      (Object.keys(SCROLLS) as ScrollId[]).map((id) => [id, scrollSprite(EMBLEMS[id])] as const),
+    ),
+    gear: new Map((Object.keys(GEAR) as GearId[]).map((id) => [id, gearSprite(id)] as const)),
+    rock: rockSprite(),
+    iceGlow: glowSprite(8, "#8fd8ff"),
+    zapGlow: glowSprite(9, "#ffe46a"),
     dice,
     shadow(w: number) {
       let s = shadows.get(w);

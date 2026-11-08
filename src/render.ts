@@ -3,7 +3,7 @@ import { numberSprite } from "./art/font";
 import { OUTLINE } from "./art/palette";
 import type { PlacedProp } from "./art/world";
 import { CFG } from "./config";
-import type { Enemy, Game } from "./game";
+import type { DamageNumber, Enemy, Game, Puddle } from "./game";
 
 export interface Joystick {
   active: boolean;
@@ -61,9 +61,18 @@ export class Renderer {
           props.push(pr);
         }
 
-    // ---------- Shadows ----------
+    // ---------- Shadows, then small props lying on the ground ----------
+    // Only trees are tall enough to stand in front of characters. Everything else is
+    // drawn as part of the ground, so a mushroom never covers the wizard's face.
     ctx.globalAlpha = 0.28;
     for (const pr of props) if (pr.art.shadow) this.shadow(ctx, pr.x, pr.y, pr.art.shadow, R, camX, camY);
+    ctx.globalAlpha = 1;
+    for (const pr of props) if (!pr.art.tall) img(pr.art.sprite.n, pr.x - pr.art.ax, pr.y - pr.art.ay);
+
+    // ---------- Puddles ----------
+    for (const pd of g.puddles) this.drawPuddle(ctx, pd, R, camX, camY, realTime);
+
+    ctx.globalAlpha = 0.28;
     for (const e of g.enemies) this.shadow(ctx, e.x, e.y, shadowW(e), R, camX, camY);
     this.shadow(ctx, p.x, p.y, 14, R, camX, camY);
     ctx.globalAlpha = 1;
@@ -90,9 +99,20 @@ export class Renderer {
       img(s.n, d.x - s.w / 2, d.y - s.h - 2 + bob);
     }
 
+    // ---------- Death puffs, under the living so they never hide the wizard ----------
+    for (const f of g.fx) {
+      if (f.kind !== "poof") continue;
+      const k = f.t / f.dur;
+      const fr = A.poof[Math.min(A.poof.length - 1, Math.floor(k * A.poof.length))];
+      const sc = Math.max(1, Math.round(f.scale));
+      ctx.globalAlpha = (k > 0.5 ? 1 - (k - 0.5) / 0.5 : 1) * 0.8;
+      img(fr.n, f.x - (fr.w * sc) / 2, f.y - (fr.h * sc) / 2, fr.w * sc, fr.h * sc);
+    }
+    ctx.globalAlpha = 1;
+
     // ---------- Characters and props, back to front ----------
     const list: Drawable[] = [];
-    for (const pr of props) list.push({ y: pr.y, prop: pr });
+    for (const pr of props) if (pr.art.tall) list.push({ y: pr.y, prop: pr });
     for (const e of g.enemies) list.push({ y: e.y, e });
     list.push({ y: p.y, player: true });
     list.sort((a, b) => a.y - b.y);
@@ -125,6 +145,35 @@ export class Renderer {
       img(fr.n, s.x - fr.w / 2, s.y - fr.h / 2);
     }
 
+    // ---------- Orbit rocks, frost novas, lightning ----------
+    for (const r of g.rocks) img(A.rock.n, r.x - A.rock.w / 2, r.y - A.rock.h / 2);
+    for (const n of g.novas) {
+      if (n.t < 0) continue;
+      const k = Math.min(1, n.t / 0.35);
+      const ring = this.ringSprite(Math.max(3, Math.round(n.r * k)));
+      ctx.globalAlpha = n.t > 0.35 ? Math.max(0, 1 - (n.t - 0.35) / 0.25) : 1;
+      img(ring, n.x - ring.width / 2, n.y - ring.height / 2);
+      ctx.globalAlpha = 1;
+    }
+    if (g.bolts.length) {
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      for (const b of g.bolts) {
+        const path = this.boltPath(b.pts, b.t);
+        const fade = 1 - b.t / 0.2;
+        for (const [w, col] of [[7, `rgba(255,190,60,${0.3 * fade})`], [3.5, `rgba(255,240,140,${0.95 * fade})`], [1.5, `rgba(255,255,255,${fade})`]] as const) {
+          ctx.strokeStyle = col;
+          ctx.lineWidth = w;
+          ctx.beginPath();
+          path.forEach(([x, y], i) => (i ? ctx.lineTo(R(x - camX), R(y - camY)) : ctx.moveTo(R(x - camX), R(y - camY))));
+          ctx.stroke();
+        }
+        for (const [x, y] of b.pts.slice(1)) img(A.zapGlow, x - A.zapGlow.width / 2, y - A.zapGlow.height / 2);
+      }
+      ctx.globalCompositeOperation = "source-over";
+    }
+
     // ---------- Particles and effects ----------
     for (const pt of g.parts) {
       ctx.fillStyle = pt.color;
@@ -134,17 +183,13 @@ export class Renderer {
     for (const f of g.fx) {
       const k = f.t / f.dur;
       if (f.kind === "poof") {
-        const fr = A.poof[Math.min(A.poof.length - 1, Math.floor(k * A.poof.length))];
-        const sc = Math.max(1, Math.round(f.scale));
-        ctx.globalAlpha = k > 0.6 ? 1 - (k - 0.6) / 0.4 : 1;
-        img(fr.n, f.x - (fr.w * sc) / 2, f.y - (fr.h * sc) / 2, fr.w * sc, fr.h * sc);
-        ctx.globalAlpha = 1;
+        continue;
       } else if (f.kind === "spark") {
         const fr = A.spark[Math.min(2, Math.floor(k * 3))];
         img(fr, f.x - 2, f.y - 2);
       } else {
         ctx.globalAlpha = 1 - k;
-        ctx.strokeStyle = "#c6fbff";
+        ctx.strokeStyle = f.kind === "heal" ? "#b8f080" : "#c6fbff";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(R(f.x - camX), R(f.y - camY), 6 + k * 30 * f.scale, 0, Math.PI * 2);
@@ -156,8 +201,9 @@ export class Renderer {
     // ---------- Damage numbers: pop up, then float away ----------
     for (const n of g.nums) {
       const pop = n.t < 0.06 ? 3 : n.t < 0.12 ? 1 : 0;
-      const c = numberSprite(String(n.value), n.big ? "#ffe46a" : "#ffffff", n.big ? "#ffa424" : "#c8c8dc");
-      const sc = n.big ? 2 : 1;
+      const [col, sh] = NUMBER_COLORS[n.style];
+      const c = numberSprite(String(n.value), col, sh);
+      const sc = n.style === "big" || n.style === "heal" ? 2 : 1;
       ctx.globalAlpha = n.t > 0.5 ? 1 - (n.t - 0.5) / 0.2 : 1;
       img(c, n.x - (c.width * sc) / 2, n.y - n.t * 22 - pop, c.width * sc, c.height * sc);
       ctx.globalAlpha = 1;
@@ -182,6 +228,106 @@ export class Renderer {
     if (joy.active) this.drawJoystick(ctx, joy);
   }
 
+  private rings = new Map<number, HTMLCanvasElement>();
+  /** A crisp pixel ring of ice, cached by radius. */
+  private ringSprite(r: number): HTMLCanvasElement {
+    let c = this.rings.get(r);
+    if (c) return c;
+    const ry = Math.round(r * 0.8);
+    c = document.createElement("canvas");
+    c.width = r * 2 + 7;
+    c.height = ry * 2 + 7;
+    const x = c.getContext("2d")!;
+    const cx = r + 3.5;
+    const cy = ry + 3.5;
+    for (let j = 0; j < c.height; j++)
+      for (let i = 0; i < c.width; i++) {
+        const d = Math.hypot((i + 0.5 - cx) / r, (j + 0.5 - cy) / ry);
+        const px = (1 - d) * r;
+        let col = "";
+        if (px >= -1 && px < 1.2) col = "#ffffff";
+        else if (px >= 1.2 && px < 3.5) col = "#8fd8ff";
+        else if (px >= 3.5 && px < 5) col = "#50b8f0";
+        else if (px >= 5 && px < 8 && (i + j) % 2 === 0) col = "#2490d0";
+        if (!col) continue;
+        x.fillStyle = col;
+        x.fillRect(i, j, 1, 1);
+      }
+    if (this.rings.size > 200) this.rings.clear();
+    this.rings.set(r, c);
+    return c;
+  }
+
+  private bolts = new WeakMap<object, [number, number][]>();
+  /** A jagged lightning path through the hit points, re-jittered a few times while it lives. */
+  private boltPath(pts: [number, number][], t: number): [number, number][] {
+    const step = Math.floor(t / 0.05);
+    const cached = this.bolts.get(pts);
+    if (cached && (cached as unknown as { step: number }).step === step) return cached;
+    const out: [number, number][] = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const [x0, y0] = pts[i - 1];
+      const [x1, y1] = pts[i];
+      const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const nx = -(y1 - y0) / len;
+      const ny = (x1 - x0) / len;
+      const segs = Math.max(2, Math.round(len / 10));
+      for (let k = 1; k < segs; k++) {
+        const off = (Math.random() - 0.5) * 9;
+        out.push([x0 + ((x1 - x0) * k) / segs + nx * off, y0 + ((y1 - y0) * k) / segs + ny * off]);
+      }
+      out.push(pts[i]);
+    }
+    (out as unknown as { step: number }).step = step;
+    this.bolts.set(pts, out);
+    return out;
+  }
+
+  private puddles = new Map<number, HTMLCanvasElement>();
+  private drawPuddle(ctx: CanvasRenderingContext2D, pd: Puddle, R: (v: number) => number, camX: number, camY: number, realTime: number) {
+    const r = Math.round(pd.r);
+    let c = this.puddles.get(r);
+    if (!c) {
+      const ry = Math.round(r * 0.7);
+      c = document.createElement("canvas");
+      c.width = r * 2 + 4;
+      c.height = ry * 2 + 4;
+      const x = c.getContext("2d")!;
+      const ramp = ["#0c2010", "#173d1c", "#245c22", "#3f8a2a", "#7ad040", "#c8f080"];
+      // A blob made of a few overlapping circles, so each puddle size has an organic outline
+      const lobes = [[0, 0, 0.8], [-0.42, 0.12, 0.55], [0.45, -0.1, 0.55], [0.1, 0.38, 0.5], [-0.15, -0.35, 0.5]];
+      const field = (u: number, v: number) => Math.max(...lobes.map(([lx, ly, lr]) => 1 - Math.hypot(u - lx, v - ly) / lr));
+      for (let j = 0; j < c.height; j++)
+        for (let i = 0; i < c.width; i++) {
+          const u = (i + 0.5 - c.width / 2) / r;
+          const v = (j + 0.5 - c.height / 2) / ry;
+          const f = field(u, v);
+          if (f <= 0) continue;
+          const shine = u < -0.15 && v < -0.1 && f > 0.35 && f < 0.5;
+          x.fillStyle = f < 0.08 ? ramp[0] : f < 0.18 ? ramp[1] : shine ? ramp[4] : f > 0.55 ? ramp[3] : ramp[2];
+          x.fillRect(i, j, 1, 1);
+        }
+      this.puddles.set(r, c);
+    }
+    const life = pd.t / pd.dur;
+    const sc = life < 0.08 ? life / 0.08 : 1;
+    ctx.globalAlpha = (life > 0.8 ? (1 - life) / 0.2 : 1) * 0.78;
+    const w = c.width * sc;
+    const h = c.height * sc;
+    ctx.drawImage(c, R(pd.x - w / 2 - camX), R(pd.y - h / 2 - camY), w, h);
+    // Bubbles that pop up and burst
+    for (let i = 0; i < 4; i++) {
+      const ph = (realTime * 1.3 + i * 0.27 + pd.x * 0.01) % 1;
+      const a = i * 2.1 + pd.y;
+      const bx = pd.x + Math.cos(a) * pd.r * 0.5;
+      const by = pd.y + Math.sin(a) * pd.r * 0.3 - ph * 3;
+      ctx.fillStyle = ph < 0.8 ? "#c8f080" : "#7ad040";
+      const sz = ph < 0.8 ? 2 : 1;
+      ctx.fillRect(R(bx - camX), R(by - camY), sz, sz);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   private shadow(
     ctx: CanvasRenderingContext2D, x: number, y: number, w: number, R: (v: number) => number, camX: number, camY: number,
   ) {
@@ -201,6 +347,21 @@ export class Renderer {
     ctx.drawImage(og, R(p.x + 8 * p.face - og.width / 2 - camX), R(p.y - 18 - og.height / 2 - camY));
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
+    if (p.ward > 0) {
+      const pulse = Math.sin(realTime * 10) * 1.5;
+      const fading = p.ward < 1 && Math.floor(realTime * 10) % 2 === 0;
+      if (!fading) {
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = "rgba(70,214,240,0.16)";
+        ctx.strokeStyle = "rgba(198,251,255,0.8)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(R(p.x - camX), R(p.y - 12 - camY), 20 + pulse, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.globalCompositeOperation = "source-over";
+      }
+    }
     if (blinking && !g.over) return;
     const frames = p.moving ? A.heroWalk : A.heroIdle;
     const s = frames[Math.floor(p.moving ? p.walkT * 11 : realTime * 2.5) % frames.length];
@@ -230,7 +391,8 @@ export class Renderer {
     }
     const s = frames[Math.floor(t * speed + e.phase * 3) % frames.length];
     const left = g.player.x < e.x;
-    const c = e.flash > 0 ? (left ? s.fl : s.f) : left ? s.nl : s.n;
+    let c = e.flash > 0 ? (left ? s.fl : s.f) : left ? s.nl : s.n;
+    if (e.chillT > 0 && e.flash <= 0) c = tinted(c);
     const dx = R(e.x - s.w / 2 - camX);
     const dy = R(e.y - s.h + 3 - lift - camY);
     ctx.drawImage(c, dx, dy);
@@ -293,4 +455,28 @@ export class Renderer {
 
 function shadowW(e: Enemy) {
   return e.kind === "king" ? 34 : e.kind === "slime" ? 16 : e.kind === "skel" ? 12 : 10;
+}
+
+const NUMBER_COLORS: Record<DamageNumber["style"], [string, string]> = {
+  hit: ["#ffffff", "#c8c8dc"],
+  big: ["#ffe46a", "#ffa424"],
+  burn: ["#ffa424", "#f05a1a"],
+  heal: ["#c8f080", "#7ad040"],
+};
+
+const tintCache = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
+/** An icy blue version of a sprite, for chilled enemies. */
+function tinted(src: HTMLCanvasElement): HTMLCanvasElement {
+  let c = tintCache.get(src);
+  if (c) return c;
+  c = document.createElement("canvas");
+  c.width = src.width;
+  c.height = src.height;
+  const x = c.getContext("2d")!;
+  x.drawImage(src, 0, 0);
+  x.globalCompositeOperation = "source-atop";
+  x.fillStyle = "rgba(120,200,255,0.5)";
+  x.fillRect(0, 0, c.width, c.height);
+  tintCache.set(src, c);
+  return c;
 }

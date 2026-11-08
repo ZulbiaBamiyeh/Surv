@@ -17,13 +17,18 @@ export const CFG = {
     maxHp: 100,
     radius: 6,
     /** Invulnerability after being hit, in seconds. */
-    iframes: 0.6,
+    iframes: 0.7,
+    /** Health regained per second. */
+    regen: 0.4,
     pickupRadius: 38,
   },
 
+  /** Each pip in a Speed socket makes that scroll cast this much faster (0.08 = 8%). */
+  speedPerPip: 0.08,
+  /** Small damage bonus for every level gained. Most power comes from items. */
+  levelDamage: 0.03,
+
   fireball: {
-    cooldown: 0.8,
-    damage: 10,
     speed: 235,
     life: 1.0,
     radius: 4,
@@ -35,11 +40,18 @@ export const CFG = {
     fullCircleDeg: 300,
     /** Only casts when an enemy is within this distance. */
     range: 220,
-    /** Each pip in the Speed socket makes casting this much faster (0.08 = 8%). */
-    speedPerPip: 0.08,
-    /** Damage bonus per level gained. */
-    damagePerLevel: 0.1,
   },
+
+  /** Burn from Ember Rings lasts this long; chill from Frost Nova slows by chillSlow for chillTime. */
+  burnTime: 3,
+  chillTime: 2.5,
+  chillSlow: 0.5,
+
+  /** Survive this many seconds to win the run. */
+  runLength: 900,
+
+  /** Level-up choices offered. */
+  offers: 3,
 
   enemies: {
     slime: { hp: 10, speed: 36, damage: 8, radius: 8, xp: 1, color: "#ff83c0" },
@@ -52,11 +64,15 @@ export const CFG = {
     /** Enemies per second at the start. */
     startRate: 0.8,
     /** Extra enemies per second added each minute. */
-    ratePerMin: 3,
-    maxRate: 20,
-    maxEnemies: 450,
-    /** Enemy HP multiplier grows by this much per minute. */
-    hpPerMin: 0.35,
+    ratePerMin: 1.5,
+    /** Spawn rate also grows with minutes squared, so the early game is calm and the late game is not. */
+    ratePerMin2: 0.2,
+    maxRate: 28,
+    maxEnemies: 520,
+    /** Enemy HP is multiplied by this every minute (1.3 means about 2.9x at 4:00, 14x at 10:00, 51x at 15:00). */
+    hpGrowth: 1.3,
+    /** Enemy contact damage grows by this much per minute. */
+    damagePerMin: 0.1,
     batsAfter: 20,
     skeletonsAfter: 60,
     /** Seconds until the first King Slime, then the gap between them. Kings always drop a die. */
@@ -68,6 +84,8 @@ export const CFG = {
     /** XP needed for level 2; each further level needs perLevel more. */
     base: 5,
     perLevel: 4,
+    /** Extra XP per level squared, so later levels slow down. */
+    perLevel2: 0.18,
   },
 
   dice: {

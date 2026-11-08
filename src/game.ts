@@ -1,6 +1,7 @@
 import { CFG, EnemyKind } from "./config";
+import { GEAR, GearId, MAX_TIER, SCROLLS, ScrollId } from "./content";
 import { pickDie } from "./dice";
-import { Bag, fireballStats, makeDie, makeScroll } from "./inventory";
+import { Bag, Item, Loadout, SpellStats, computeLoadout, makeDie, makeGear, makeScroll } from "./inventory";
 
 export interface Enemy {
   kind: EnemyKind;
@@ -18,6 +19,13 @@ export interface Enemy {
   flash: number;
   phase: number;
   dead: boolean;
+  burnT: number;
+  burnDps: number;
+  /** Burn damage waiting to be shown as a number. */
+  burnShown: number;
+  chillT: number;
+  /** Time until Orbit Rocks can hit this enemy again. */
+  orbitT: number;
 }
 
 export interface Shot {
@@ -27,8 +35,38 @@ export interface Shot {
   vy: number;
   life: number;
   damage: number;
+  burn: number;
   pierce: number;
   hit: Enemy[];
+  dead: boolean;
+}
+
+export interface Nova {
+  x: number;
+  y: number;
+  t: number;
+  r: number;
+  damage: number;
+  burn: number;
+  hit: Set<Enemy>;
+  dead: boolean;
+}
+
+export interface Bolt {
+  pts: [number, number][];
+  t: number;
+  dead: boolean;
+}
+
+export interface Puddle {
+  x: number;
+  y: number;
+  r: number;
+  t: number;
+  dur: number;
+  tick: number;
+  damage: number;
+  burn: number;
   dead: boolean;
 }
 
@@ -61,11 +99,13 @@ export interface Particle {
   max: number;
   color: string;
   size: number;
+  /** Upward drift per second (for embers and heal sparkles). */
+  rise?: number;
 }
 
 /** A short sprite animation: smoke puffs, impact sparks and level-up rings. */
 export interface Effect {
-  kind: "poof" | "spark" | "ring";
+  kind: "poof" | "spark" | "ring" | "heal";
   x: number;
   y: number;
   t: number;
@@ -78,17 +118,20 @@ export interface DamageNumber {
   y: number;
   value: number;
   t: number;
-  big: boolean;
+  style: "hit" | "big" | "burn" | "heal";
 }
 
 export interface GameEvents {
   toast(msg: string, kind?: "good" | "warn" | "gold"): void;
   bagChanged(): void;
   gameOver(): void;
+  levelUp?(): void;
 }
 
 const HASH_CELL = 32;
 const hashKey = (cx: number, cy: number) => (cx + 32768) * 65536 + (cy + 32768);
+const NOVA_TIME = 0.35;
+const BOLT_TIME = 0.2;
 
 function compact<T extends { dead: boolean }>(arr: T[]) {
   let j = 0;
@@ -102,40 +145,63 @@ export class Game {
   level = 1;
   xp = 0;
   over = false;
+  /** True when the player survived the whole run. */
+  won = false;
   hitstop = 0;
   shake = 0;
   viewW = 400;
   viewH = 240;
+  /** Level-ups waiting for the player to choose a reward. */
+  pendingLevels = 0;
   /** Movement input, length 0..1. */
   input = { x: 0, y: 0 };
 
-  player = { x: 0, y: 0, vx: 0, vy: 0, hp: CFG.player.maxHp, maxHp: CFG.player.maxHp, inv: 0, moving: false, face: 1, walkT: 0 };
+  player = {
+    x: 0, y: 0, vx: 0, vy: 0, hp: CFG.player.maxHp, maxHp: CFG.player.maxHp, inv: 0, moving: false, face: 1, walkT: 0,
+    /** Seconds of Ward bubble left. */
+    ward: 0,
+  };
   enemies: Enemy[] = [];
   shots: Shot[] = [];
+  novas: Nova[] = [];
+  bolts: Bolt[] = [];
+  puddles: Puddle[] = [];
   gems: Gem[] = [];
   dice: DiePickup[] = [];
   parts: Particle[] = [];
   fx: Effect[] = [];
   nums: DamageNumber[] = [];
   bag = new Bag();
+  loadout!: Loadout;
+  /** Orbit rock positions, refreshed every step for drawing. */
+  rocks: { x: number; y: number }[] = [];
 
-  private castT = 0.4;
+  private castT = new Map<number, number>();
+  private orbitAngle = 0;
   private spawnAcc = 0;
   private nextKing = CFG.spawn.kingFirst;
   private hash = new Map<number, Enemy[]>();
   private pool: Enemy[][] = [];
 
   constructor(private events: GameEvents) {
-    this.bag.add(makeScroll());
+    this.bag.add(makeScroll("fireball"));
     this.bag.add(makeDie(CFG.dice.starting));
+    this.refreshLoadout();
   }
 
   get xpNeeded() {
-    return CFG.xp.base + CFG.xp.perLevel * (this.level - 1);
+    const l = this.level - 1;
+    return Math.round(CFG.xp.base + CFG.xp.perLevel * l + CFG.xp.perLevel2 * l * l);
   }
 
-  get stats() {
-    return fireballStats(this.bag.scroll, this.level);
+  /** Recomputes spell stats. Call whenever the backpack changes. */
+  refreshLoadout() {
+    this.loadout = computeLoadout(this.bag, this.level);
+    const p = this.player;
+    const max = CFG.player.maxHp + this.loadout.maxHpBonus;
+    if (max > p.maxHp) p.hp += max - p.maxHp;
+    p.maxHp = max;
+    p.hp = Math.min(p.hp, p.maxHp);
   }
 
   step(dt: number) {
@@ -146,16 +212,29 @@ export class Game {
       return;
     }
     this.time += dt;
+    if (this.time >= CFG.runLength) {
+      this.won = true;
+      this.over = true;
+      this.effect("ring", this.player.x, this.player.y - 10, 3, 1);
+      this.events.gameOver();
+      return;
+    }
     this.updatePlayer(dt);
     this.spawn(dt);
     this.buildHash();
     this.updateEnemies(dt);
-    this.cast(dt);
+    this.castSpells(dt);
     this.updateShots(dt);
+    this.updateNovas(dt);
+    this.updatePuddles(dt);
+    this.updateOrbit(dt);
     this.updatePickups(dt);
     this.updateFx(dt);
     compact(this.enemies);
     compact(this.shots);
+    compact(this.novas);
+    compact(this.bolts);
+    compact(this.puddles);
     compact(this.gems);
     compact(this.dice);
   }
@@ -165,8 +244,9 @@ export class Game {
   private updatePlayer(dt: number) {
     const p = this.player;
     const c = CFG.player;
-    const tx = this.input.x * c.speed;
-    const ty = this.input.y * c.speed;
+    const speed = c.speed * this.loadout.moveMul;
+    const tx = this.input.x * speed;
+    const ty = this.input.y * speed;
     const moving = tx !== 0 || ty !== 0;
     const dx = tx - p.vx;
     const dy = ty - p.vy;
@@ -185,6 +265,8 @@ export class Game {
     if (this.input.x !== 0) p.face = this.input.x > 0 ? 1 : -1;
     if (moving) p.walkT += dt;
     p.inv = Math.max(0, p.inv - dt);
+    p.ward = Math.max(0, p.ward - dt);
+    p.hp = Math.min(p.maxHp, p.hp + c.regen * dt);
   }
 
   private hurt(amount: number) {
@@ -207,7 +289,8 @@ export class Game {
 
   private spawn(dt: number) {
     const s = CFG.spawn;
-    const rate = Math.min(s.maxRate, s.startRate + (s.ratePerMin * this.time) / 60);
+    const m = this.time / 60;
+    const rate = Math.min(s.maxRate, s.startRate + s.ratePerMin * m + s.ratePerMin2 * m * m);
     this.spawnAcc += rate * dt;
     while (this.spawnAcc >= 1) {
       this.spawnAcc -= 1;
@@ -223,7 +306,7 @@ export class Game {
   private pickKind(): EnemyKind {
     const s = CFG.spawn;
     const bat = this.time > s.batsAfter ? 4 : 0;
-    const skel = this.time > s.skeletonsAfter ? 2 + this.time / 60 : 0;
+    const skel = this.time > s.skeletonsAfter ? 1.5 + this.time / 90 : 0;
     let r = Math.random() * (6 + bat + skel);
     if ((r -= 6) < 0) return "slime";
     if ((r -= bat) < 0) return "bat";
@@ -238,12 +321,14 @@ export class Game {
 
   spawnEnemy(kind: EnemyKind) {
     const t = CFG.enemies[kind];
-    const hpScale = 1 + (CFG.spawn.hpPerMin * this.time) / 60;
+    const min = this.time / 60;
+    const hpScale = CFG.spawn.hpGrowth ** min;
     const { x, y } = this.ringPoint();
-    const hp = t.hp * hpScale;
+    const hp = t.hp * hpScale * (kind === "king" ? 1 + min * 0.5 : 1);
     this.enemies.push({
       kind, x, y, kx: 0, ky: 0, hp, maxHp: hp, r: t.radius, speed: t.speed * (0.9 + Math.random() * 0.2),
-      damage: t.damage, xp: t.xp, flash: 0, phase: Math.random() * 10, dead: false,
+      damage: t.damage * (1 + CFG.spawn.damagePerMin * min), xp: t.xp, flash: 0, phase: Math.random() * 10, dead: false,
+      burnT: 0, burnDps: 0, burnShown: 0, chillT: 0, orbitT: 0,
     });
   }
 
@@ -266,11 +351,11 @@ export class Game {
     }
   }
 
-  private forNear(x: number, y: number, fn: (e: Enemy) => void) {
+  private forNear(x: number, y: number, fn: (e: Enemy) => void, reach = 1) {
     const cx = Math.floor(x / HASH_CELL);
     const cy = Math.floor(y / HASH_CELL);
-    for (let dx = -1; dx <= 1; dx++)
-      for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -reach; dx <= reach; dx++)
+      for (let dy = -reach; dy <= reach; dy++) {
         const a = this.hash.get(hashKey(cx + dx, cy + dy));
         if (a) for (let i = 0; i < a.length; i++) fn(a[i]);
       }
@@ -287,11 +372,30 @@ export class Game {
       const d = Math.hypot(dx, dy) || 1;
       dx /= d;
       dy /= d;
-      e.x += (dx * e.speed + e.kx) * dt;
-      e.y += (dy * e.speed + e.ky) * dt;
+      const slow = e.chillT > 0 ? 1 - CFG.chillSlow : 1;
+      e.x += (dx * e.speed * slow + e.kx) * dt;
+      e.y += (dy * e.speed * slow + e.ky) * dt;
       e.kx *= decay;
       e.ky *= decay;
       e.flash = Math.max(0, e.flash - dt);
+      e.chillT = Math.max(0, e.chillT - dt);
+      e.orbitT = Math.max(0, e.orbitT - dt);
+      if (e.burnT > 0) {
+        e.burnT -= dt;
+        const dmg = e.burnDps * dt;
+        e.hp -= dmg;
+        e.burnShown += dmg;
+        if (Math.random() < dt * 12)
+          this.parts.push({ x: e.x + (Math.random() - 0.5) * e.r * 1.4, y: e.y - Math.random() * e.r * 1.6, vx: 0, vy: 0, life: 0.4, max: 0.4, color: Math.random() < 0.5 ? "#ffa424" : "#f05a1a", size: 1, rise: 24 });
+        if (e.burnShown >= 4 || (e.burnT <= 0 && e.burnShown >= 1)) {
+          this.nums.push({ x: e.x + 4, y: e.y - e.r * 2, value: Math.round(e.burnShown), t: 0, style: "burn" });
+          e.burnShown = 0;
+        }
+        if (e.hp <= 0) {
+          this.kill(e);
+          continue;
+        }
+      }
 
       // Soft separation so the horde spreads out instead of stacking.
       this.forNear(e.x, e.y, (o) => {
@@ -314,48 +418,119 @@ export class Game {
         e.y = pt.y;
       }
 
-      if (d < e.r + CFG.player.radius && p.inv <= 0 && !this.over) this.hurt(e.damage);
+      if (d < e.r + CFG.player.radius && p.inv <= 0 && p.ward <= 0 && !this.over) this.hurt(e.damage);
     }
   }
 
-  // ---------- Fireball ----------
+  // ---------- Spells ----------
 
-  private cast(dt: number) {
-    this.castT -= dt;
-    if (this.castT > 0) return;
-    const p = this.player;
-    const fb = CFG.fireball;
+  private nearest(x: number, y: number, range: number, skip?: Set<Enemy>): Enemy | null {
     let best: Enemy | null = null;
-    let bestD = fb.range * fb.range;
+    let bestD = range * range;
     for (const e of this.enemies) {
-      const d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2;
+      if (e.dead || skip?.has(e)) continue;
+      const d = (e.x - x) ** 2 + (e.y - y) ** 2;
       if (d < bestD) {
         bestD = d;
         best = e;
       }
     }
-    if (!best) {
-      this.castT = 0.05;
-      return;
+    return best;
+  }
+
+  private castSpells(dt: number) {
+    for (const sp of this.loadout.spells) {
+      if (sp.item.def === "orbit") continue;
+      let t = (this.castT.get(sp.item.id) ?? 0.3) - dt;
+      if (t <= 0) {
+        const cast = this.cast(sp);
+        t = cast ? sp.cooldown : 0.1;
+      }
+      this.castT.set(sp.item.id, t);
     }
-    const st = this.stats;
-    // Fireballs leave from the orb on top of the staff.
-    const ox = p.x + 8 * p.face;
-    const oy = p.y - 18;
-    const aim = Math.atan2(best.y - oy, best.x - ox);
-    const n = st.count;
-    const spread = (fb.spreadDeg * Math.PI) / 180;
-    const fanWidth = (n - 1) * spread;
-    const ring = fanWidth >= (fb.fullCircleDeg * Math.PI) / 180;
-    for (let i = 0; i < n; i++) {
-      const a = n === 1 ? aim : ring ? aim + (i * Math.PI * 2) / n : aim - fanWidth / 2 + i * spread;
-      this.shots.push({
-        x: ox, y: oy, vx: Math.cos(a) * fb.speed, vy: Math.sin(a) * fb.speed, life: fb.life,
-        damage: st.damage, pierce: fb.pierce, hit: [], dead: false,
-      });
+  }
+
+  /** Casts one spell. Returns false if there was nothing to cast at. */
+  private cast(sp: SpellStats): boolean {
+    const p = this.player;
+    switch (sp.item.def as ScrollId) {
+      case "fireball": {
+        const fb = CFG.fireball;
+        const ox = p.x + 8 * p.face;
+        const oy = p.y - 18;
+        const target = this.nearest(ox, oy, fb.range);
+        if (!target) return false;
+        const aim = Math.atan2(target.y - target.r - oy, target.x - ox);
+        const n = sp.count;
+        const spread = (fb.spreadDeg * Math.PI) / 180;
+        const fanWidth = (n - 1) * spread;
+        const ring = fanWidth >= (fb.fullCircleDeg * Math.PI) / 180;
+        for (let i = 0; i < n; i++) {
+          const a = n === 1 ? aim : ring ? aim + (i * Math.PI * 2) / n : aim - fanWidth / 2 + i * spread;
+          this.shots.push({
+            x: ox, y: oy, vx: Math.cos(a) * fb.speed, vy: Math.sin(a) * fb.speed, life: fb.life,
+            damage: sp.damage, burn: sp.burn, pierce: fb.pierce, hit: [], dead: false,
+          });
+        }
+        this.burst(ox + Math.cos(aim) * 6, oy + Math.sin(aim) * 6, "#ffe46a", 3, 30);
+        return true;
+      }
+      case "frost": {
+        if (!this.nearest(p.x, p.y, sp.area * 1.6)) return false;
+        for (let i = 0; i < 18; i++) {
+          const a = (i / 18) * Math.PI * 2;
+          const v = sp.area * 2.6;
+          this.parts.push({ x: p.x, y: p.y - 6, vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.8, life: 0.35, max: 0.35, color: i % 2 ? "#ffffff" : "#8fd8ff", size: 2 });
+        }
+        for (let i = 0; i < sp.count; i++)
+          this.novas.push({ x: p.x, y: p.y - 6, t: -i * 0.22, r: sp.area * (1 + i * 0.18), damage: sp.damage, burn: sp.burn, hit: new Set(), dead: false });
+        return true;
+      }
+      case "zap": {
+        const first = this.nearest(p.x, p.y, 200);
+        if (!first) return false;
+        const hit = new Set<Enemy>();
+        const pts: [number, number][] = [[p.x + 8 * p.face, p.y - 18]];
+        let cur: Enemy | null = first;
+        for (let i = 0; i <= sp.count && cur; i++) {
+          hit.add(cur);
+          pts.push([cur.x, cur.y - cur.r]);
+          this.damage(cur, sp.damage, cur.x - pts[pts.length - 2][0], cur.y - pts[pts.length - 2][1], sp.burn, 0.4);
+          this.effect("spark", cur.x, cur.y - cur.r, 1, 0.16);
+          cur = this.nearest(cur.x, cur.y, sp.area, hit);
+        }
+        this.bolts.push({ pts, t: 0, dead: false });
+        return true;
+      }
+      case "puddle": {
+        if (!this.nearest(p.x, p.y, 170)) return false;
+        for (let i = 0; i < sp.count; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = i === 0 ? 0 : 26 + Math.random() * 40;
+          this.puddles.push({
+            x: p.x + Math.cos(a) * d, y: p.y + Math.sin(a) * d * 0.8, r: sp.area, t: 0, dur: 4, tick: 0,
+            damage: sp.damage, burn: sp.burn, dead: false,
+          });
+        }
+        return true;
+      }
+      case "ward": {
+        p.ward = 3 + sp.count * 0.5;
+        this.effect("ring", p.x, p.y - 10, 1.2, 0.4);
+        return true;
+      }
+      case "mend": {
+        const amount = Math.round(p.maxHp * (0.12 + sp.count * 0.03));
+        if (p.hp >= p.maxHp) return false;
+        p.hp = Math.min(p.maxHp, p.hp + amount);
+        this.nums.push({ x: p.x, y: p.y - 34, value: amount, t: 0, style: "heal" });
+        this.effect("heal", p.x, p.y - 10, 1, 0.8);
+        for (let i = 0; i < 14; i++)
+          this.parts.push({ x: p.x + (Math.random() - 0.5) * 20, y: p.y - Math.random() * 24, vx: 0, vy: 0, life: 0.8, max: 0.8, color: i % 2 ? "#8ae04a" : "#e8ffd0", size: 2, rise: 30 });
+        return true;
+      }
     }
-    this.burst(ox + Math.cos(aim) * 6, oy + Math.sin(aim) * 6, "#ffe63d", 3, 30);
-    this.castT += st.cooldown;
+    return false;
   }
 
   private updateShots(dt: number) {
@@ -376,9 +551,10 @@ export class Game {
       this.forNear(s.x, s.y, (e) => {
         if (s.dead || e.dead || s.hit.includes(e)) return;
         const rs = e.r + fb.radius;
-        if ((e.x - s.x) ** 2 + (e.y - s.y) ** 2 > rs * rs) return;
+        const ey = e.y - e.r * 0.8;
+        if ((e.x - s.x) ** 2 + (ey - s.y) ** 2 > rs * rs) return;
         s.hit.push(e);
-        this.damage(e, s.damage, s.vx, s.vy);
+        this.damage(e, s.damage, s.vx, s.vy, s.burn);
         this.burst(s.x, s.y, "#ffa424", 4, 60);
         this.effect("spark", s.x, s.y, 1, 0.16);
         if (s.pierce-- <= 0) s.dead = true;
@@ -386,15 +562,85 @@ export class Game {
     }
   }
 
-  private damage(e: Enemy, amount: number, dirX: number, dirY: number) {
+  private updateNovas(dt: number) {
+    for (const n of this.novas) {
+      n.t += dt;
+      if (n.t < 0) continue;
+      const k = Math.min(1, n.t / NOVA_TIME);
+      const r = n.r * k;
+      const reach = Math.ceil(n.r / HASH_CELL);
+      this.forNear(n.x, n.y, (e) => {
+        if (e.dead || n.hit.has(e)) return;
+        if ((e.x - n.x) ** 2 + (e.y - e.r - n.y) ** 2 > (r + e.r) ** 2) return;
+        n.hit.add(e);
+        e.chillT = CFG.chillTime;
+        this.damage(e, n.damage, e.x - n.x, e.y - n.y, n.burn, 0.7);
+      }, reach);
+      if (n.t >= NOVA_TIME + 0.25) n.dead = true;
+    }
+    for (const b of this.bolts) {
+      b.t += dt;
+      if (b.t > BOLT_TIME) b.dead = true;
+    }
+  }
+
+  private updatePuddles(dt: number) {
+    for (const pd of this.puddles) {
+      pd.t += dt;
+      pd.tick -= dt;
+      if (pd.t >= pd.dur) {
+        pd.dead = true;
+        continue;
+      }
+      if (pd.tick > 0) continue;
+      pd.tick = 0.5;
+      const reach = Math.ceil(pd.r / HASH_CELL);
+      this.forNear(pd.x, pd.y, (e) => {
+        if (e.dead) return;
+        if (((e.x - pd.x) / pd.r) ** 2 + ((e.y - pd.y) / (pd.r * 0.7)) ** 2 > 1) return;
+        this.damage(e, pd.damage, 0, 0, pd.burn, 0);
+      }, reach);
+    }
+  }
+
+  private updateOrbit(dt: number) {
+    const sp = this.loadout.spells.find((s) => s.item.def === "orbit");
+    this.rocks.length = 0;
+    if (!sp) return;
+    const p = this.player;
+    const speedMul = 1 + CFG.speedPerPip * sp.pips;
+    this.orbitAngle += 3.2 * speedMul * dt;
+    const n = Math.max(1, sp.count);
+    const cy = p.y - 8;
+    for (let i = 0; i < n; i++) {
+      const a = this.orbitAngle + (i * Math.PI * 2) / n;
+      const x = p.x + Math.cos(a) * sp.area;
+      const y = cy + Math.sin(a) * sp.area * 0.85;
+      this.rocks.push({ x, y });
+      this.forNear(x, y, (e) => {
+        if (e.dead || e.orbitT > 0) return;
+        const rs = e.r + 5;
+        if ((e.x - x) ** 2 + (e.y - e.r - y) ** 2 > rs * rs) return;
+        e.orbitT = sp.cooldown / speedMul;
+        this.damage(e, sp.damage, e.x - p.x, e.y - p.y, sp.burn, 1.6);
+        this.effect("spark", x, y, 1, 0.16);
+      });
+    }
+  }
+
+  private damage(e: Enemy, amount: number, dirX: number, dirY: number, burn = 0, kbMul = 1) {
     e.hp -= amount;
     e.flash = 0.1;
+    if (burn > 0) {
+      e.burnT = CFG.burnTime;
+      e.burnDps = Math.max(e.burnDps, burn);
+    }
     const len = Math.hypot(dirX, dirY) || 1;
-    const kb = CFG.fireball.knockback * (e.kind === "king" ? 0.15 : 1);
+    const kb = CFG.fireball.knockback * kbMul * (e.kind === "king" ? 0.15 : 1);
     e.kx += (dirX / len) * kb;
     e.ky += (dirY / len) * kb;
-    this.nums.push({ x: e.x, y: e.y - e.r * 2 - 4, value: Math.max(1, Math.round(amount)), t: 0, big: e.kind === "king" });
-    if (e.hp <= 0) this.kill(e);
+    this.nums.push({ x: e.x, y: e.y - e.r * 2 - 4, value: Math.max(1, Math.round(amount)), t: 0, style: e.kind === "king" ? "big" : "hit" });
+    if (e.hp <= 0 && !e.dead) this.kill(e);
   }
 
   private kill(e: Enemy) {
@@ -413,7 +659,7 @@ export class Game {
     this.burst(e.x, e.y - e.r, color, 10, 80);
     this.effect("poof", e.x, e.y - e.r, e.kind === "skel" ? 1.1 : 0.9, 0.42);
     this.dropGem(e.x, e.y, e.xp);
-    if (Math.random() < CFG.dice.dropChance) this.dropDie(e.x, e.y, pickDie(CFG.dice.weights));
+    if (Math.random() < CFG.dice.dropChance * this.loadout.diceMul) this.dropDie(e.x, e.y, pickDie(CFG.dice.weights));
   }
 
   // ---------- Pickups ----------
@@ -431,7 +677,7 @@ export class Game {
     const dx = p.x - o.x;
     const dy = p.y - 8 - o.y;
     const d = Math.hypot(dx, dy) || 1;
-    if (!o.magnet && d < CFG.player.pickupRadius) o.magnet = true;
+    if (!o.magnet && d < CFG.player.pickupRadius * this.loadout.pickupMul) o.magnet = true;
     if (!o.magnet) return false;
     o.sp = Math.max(o.sp + 500 * dt, 60);
     const step = Math.min(d, o.sp * dt);
@@ -474,17 +720,80 @@ export class Game {
     while (this.xp >= this.xpNeeded) {
       this.xp -= this.xpNeeded;
       this.level++;
+      this.pendingLevels++;
       const p = this.player;
       this.effect("ring", p.x, p.y - 10, 1.6, 0.5);
       for (let i = 0; i < 24; i++) {
         const a = (i / 24) * Math.PI * 2;
         this.parts.push({ x: p.x, y: p.y - 10, vx: Math.cos(a) * 90, vy: Math.sin(a) * 90, life: 0.45, max: 0.45, color: i % 2 ? "#46d6f0" : "#c6fbff", size: 2 });
       }
-      this.events.toast(`Level ${this.level}! Fireball damage +${Math.round(CFG.fireball.damagePerLevel * 100)}%`, "good");
+      this.refreshLoadout();
+      this.events.levelUp?.();
     }
   }
 
+  // ---------- Level-up rewards ----------
+
+  /** Rolls the item choices for a level-up. Items you already own are likelier, so they can merge. */
+  rollOffers(): Item[] {
+    const owned = new Map<string, number>();
+    for (const it of this.bag.items) if (it.kind === "scroll" || it.kind === "gear") owned.set(it.def, Math.max(owned.get(it.def) ?? 0, it.tier));
+    const pool: { make: () => Item; w: number; key: string }[] = [];
+    for (const id of Object.keys(SCROLLS) as ScrollId[]) {
+      const tier = owned.get(id) ?? 0;
+      if (tier >= MAX_TIER) continue;
+      const util = SCROLLS[id].utility;
+      // The first couple of level-ups only offer attack spells, so every run gets its damage going.
+      if (util && this.level <= 3) continue;
+      pool.push({ key: id, make: () => makeScroll(id), w: tier ? 2.2 : util ? 1.2 : 3 });
+    }
+    for (const id of Object.keys(GEAR) as GearId[]) {
+      if (this.level <= 3) break;
+      const tier = owned.get(id) ?? 0;
+      if (tier >= MAX_TIER) continue;
+      pool.push({ key: id, make: () => makeGear(id), w: tier ? 1.6 : 1.4 });
+    }
+    const out: Item[] = [];
+    for (let k = 0; k < CFG.offers && pool.length; k++) {
+      const total = pool.reduce((a, o) => a + o.w, 0);
+      let r = Math.random() * total;
+      let idx = 0;
+      while ((r -= pool[idx].w) > 0 && idx < pool.length - 1) idx++;
+      out.push(pool[idx].make());
+      pool.splice(idx, 1);
+    }
+    return out;
+  }
+
+  /** Gives the player an item: into the bag if it fits, otherwise into the holding tray. */
+  grant(item: Item): "placed" | "merged" | "pending" {
+    this.pendingLevels = Math.max(0, this.pendingLevels - 1);
+    const bag = this.bag;
+    // A duplicate merges straight into the matching item (and keeps chaining upward).
+    let merged = false;
+    let cur = item;
+    for (;;) {
+      const match = bag.items.find((o) => bag.canMerge(cur, o));
+      if (!match || (cur.kind !== "scroll" && cur.kind !== "gear") || (match.kind !== "scroll" && match.kind !== "gear")) break;
+      for (const n of bag.merge(cur, match)) bag.add(n);
+      merged = true;
+      cur = match;
+    }
+    let result: "placed" | "merged" | "pending" = "merged";
+    if (!merged) {
+      result = bag.add(item) ? "placed" : "pending";
+      if (result === "pending") bag.pending = item;
+    }
+    this.refreshLoadout();
+    this.events.bagChanged();
+    return result;
+  }
+
   // ---------- Effects ----------
+
+  effect(kind: Effect["kind"], x: number, y: number, scale: number, dur: number) {
+    this.fx.push({ kind, x, y, t: 0, dur, scale });
+  }
 
   burst(x: number, y: number, color: string, n: number, speed: number) {
     for (let i = 0; i < n; i++) {
@@ -493,10 +802,6 @@ export class Game {
       const life = 0.25 + Math.random() * 0.25;
       this.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life, max: life, color, size: Math.random() < 0.3 ? 2 : 1 });
     }
-  }
-
-  effect(kind: Effect["kind"], x: number, y: number, scale: number, dur: number) {
-    this.fx.push({ kind, x, y, t: 0, dur, scale });
   }
 
   private updateFx(dt: number) {
@@ -512,7 +817,7 @@ export class Game {
       pt.life -= dt;
       if (pt.life <= 0) continue;
       pt.x += pt.vx * dt;
-      pt.y += pt.vy * dt;
+      pt.y += pt.vy * dt - (pt.rise ?? 0) * dt;
       pt.vx *= drag;
       pt.vy *= drag;
       this.parts[j++] = pt;
@@ -525,5 +830,6 @@ export class Game {
       if (n.t < 0.7) this.nums[j++] = n;
     }
     this.nums.length = j;
+    if (this.nums.length > 250) this.nums.splice(0, this.nums.length - 250);
   }
 }

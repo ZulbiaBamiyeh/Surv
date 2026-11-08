@@ -3,6 +3,8 @@ import { BackpackUI } from "./backpack";
 import { CFG } from "./config";
 import { pickDie } from "./dice";
 import { spriteURL } from "./art";
+import { GEAR, SCROLLS } from "./content";
+import { Item, itemName, makeDie, makeGear, makeScroll } from "./inventory";
 import { Game } from "./game";
 import { Joystick, Renderer } from "./render";
 
@@ -29,6 +31,13 @@ app.innerHTML = `
     <span class="touch-only"><b>Drag</b> anywhere to move. Fireball casts by itself.
     You start with a <b>d6</b>: tap <b>Bag</b> to roll it.</span>
   </div>
+  <div class="overlay levelup-overlay" hidden>
+    <div class="panel levelup-panel" role="dialog" aria-label="Level up">
+      <h2>Level <span class="lv"></span>!</h2>
+      <p class="sub">Choose one for your bag.</p>
+      <div class="offers"></div>
+    </div>
+  </div>
   <div class="overlay over-overlay" hidden>
     <div class="panel over-panel">
       <h2>Bonked!</h2>
@@ -44,6 +53,8 @@ const badge = app.querySelector<HTMLElement>(".badge")!;
 const intro = app.querySelector<HTMLElement>(".intro")!;
 const overEl = app.querySelector<HTMLElement>(".over-overlay")!;
 const overStats = app.querySelector<HTMLElement>(".over-stats")!;
+const levelEl2 = app.querySelector<HTMLElement>(".levelup-overlay")!;
+const offersEl = app.querySelector<HTMLElement>(".offers")!;
 const xpFill = app.querySelector<HTMLElement>(".xp-fill")!;
 const levelEl = app.querySelector<HTMLElement>(".level b")!;
 const timerEl = app.querySelector<HTMLElement>(".timer")!;
@@ -78,9 +89,13 @@ function toast(msg: string, kind?: "good" | "warn" | "gold") {
 const events = {
   toast,
   bagChanged: () => updateBadge(),
+  levelUp: () => {},
   gameOver: () => {
     const t = game.time;
-    overStats.textContent = `You lasted ${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}, reached level ${game.level} and bonked ${game.kills} enemies.`;
+    overEl.querySelector("h2")!.textContent = game.won ? "You survived!" : "Bonked!";
+    overStats.textContent = game.won
+      ? `You made it through all ${Math.round(CFG.runLength / 60)} minutes at level ${game.level}, bonking ${game.kills} enemies.`
+      : `You lasted ${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}, reached level ${game.level} and bonked ${game.kills} enemies.`;
     window.setTimeout(() => (overEl.hidden = false), 600);
   },
 };
@@ -91,21 +106,75 @@ const bag = new BackpackUI(renderer.art, game, toast, () => updateBadge(), () =>
 app.appendChild(bag.root);
 app.querySelector<HTMLElement>(".kills i")!.style.backgroundImage = `url(${spriteURL(renderer.art.slime[0], 2)})`;
 
+// ---------- Level-up choices ----------
+
+let levelOpen = false;
+let offers: Item[] = [];
+function showLevelUp() {
+  levelOpen = true;
+  keys.clear();
+  offers = game.rollOffers();
+  levelEl2.querySelector(".lv")!.textContent = String(game.level - game.pendingLevels + 1);
+  const owned = game.bag.items;
+  offersEl.replaceChildren(
+    ...offers.map((it, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "offer";
+      if (it.kind !== "scroll" && it.kind !== "gear") return b;
+      const isScroll = it.kind === "scroll";
+      const def = isScroll ? SCROLLS[it.def] : GEAR[it.def];
+      const tag = isScroll ? (SCROLLS[it.def].utility ? "Utility scroll" : "Spell scroll") : GEAR[it.def].adjacent ? "Gear · Touching" : "Gear";
+      const match = owned.find((o) => (o.kind === "scroll" || o.kind === "gear") && o.def === it.def);
+      const img = isScroll ? renderer.art.scrolls.get(it.def)! : renderer.art.gear.get(it.def)!;
+      b.innerHTML = `
+        <span class="offer-key">${i + 1}</span>
+        <img src="${spriteURL(img, 4)}" alt="" class="px">
+        <span class="offer-tag">${tag}</span>
+        <b class="offer-name">${def.name}</b>
+        <span class="offer-desc">${def.desc}</span>
+        ${match ? `<span class="offer-merge">Merges with your ${def.name}</span>` : '<span class="offer-new">New!</span>'}`;
+      b.addEventListener("click", () => pickOffer(i));
+      return b;
+    }),
+  );
+  levelEl2.hidden = false;
+  (offersEl.firstElementChild as HTMLElement | null)?.focus();
+}
+
+function pickOffer(i: number) {
+  const it = offers[i];
+  if (!it || !levelOpen) return;
+  levelOpen = false;
+  levelEl2.hidden = true;
+  const result = game.grant(it);
+  const name = itemName(it);
+  if (result === "merged") toast(`${name} merged into a stronger tier!`, "gold");
+  else if (result === "placed") toast(`${name} added to your bag.`, "good");
+  else {
+    toast(`Your bag is full. Make room for ${name}.`, "warn");
+    toggleBag(true);
+  }
+  updateBadge();
+}
+
 function updateBadge() {
-  const n = game.bag.unrolledDice;
+  const n = game.bag.unrolledDice + (game.bag.pending && game.bag.pending.kind !== "die" ? 1 : 0);
   badge.hidden = n === 0;
   badge.textContent = String(n);
 }
 updateBadge();
 
 function toggleBag(open = !bag.isOpen) {
-  if (game.over) return;
+  if (game.over || levelOpen) return;
   if (open) bag.open();
   else bag.close();
   keys.clear();
 }
 
 function restart() {
+  levelOpen = false;
+  levelEl2.hidden = true;
   game = new Game(events);
   bag.game = game;
   overEl.hidden = true;
@@ -125,6 +194,8 @@ window.addEventListener("keydown", (e) => {
     toggleBag();
     return;
   }
+  if (levelOpen && ["Digit1", "Digit2", "Digit3"].includes(e.code)) return pickOffer(Number(e.code.slice(5)) - 1);
+  if (levelOpen) return;
   if (e.code === "Escape" && bag.isOpen) return toggleBag(false);
   if (e.code === "KeyR" && game.over) return restart();
   // Prototype cheat: drop a random die next to the player.
@@ -146,7 +217,7 @@ const toArt = (e: PointerEvent) => ({
   y: (e.clientY * (window.devicePixelRatio || 1)) / scale,
 });
 canvas.addEventListener("pointerdown", (e) => {
-  if (bag.isOpen || game.over) return;
+  if (bag.isOpen || game.over || levelOpen) return;
   joyId = e.pointerId;
   canvas.setPointerCapture(e.pointerId);
   const p = toArt(e);
@@ -220,7 +291,8 @@ function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   readInput();
-  if (!bag.isOpen && !game.over) {
+  if (!bag.isOpen && !levelOpen && !game.over && game.pendingLevels > 0) showLevelUp();
+  if (!bag.isOpen && !levelOpen && !game.over) {
     acc += dt;
     while (acc >= CFG.tick) {
       game.step(CFG.tick);
@@ -240,4 +312,4 @@ function frame(now: number) {
 requestAnimationFrame(frame);
 
 // Exposed for automated testing in the browser console.
-(window as unknown as { __game: () => Game }).__game = () => game;
+Object.assign(window, { __game: () => game, __dev: { makeScroll, makeGear, makeDie } });

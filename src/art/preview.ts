@@ -1,6 +1,6 @@
 // Dev-only sprite sheet: open /art-preview.html on the dev server to inspect the art up close.
 import { batFrame, heroFrame, kingFrame, skeletonFrame, slimeFrame } from "./characters";
-import { dieSprite, fireballFrame, gemSprite, poofFrames, scrollSprite } from "./items";
+import { dieSprite, fireballFrame, gearSprite, gemSprite, poofFrames, rockSprite, scrollSprite } from "./items";
 import type { Sprite } from "./painter";
 import { RAMPS } from "./palette";
 import { groundChunk, makePropKit } from "./world";
@@ -10,7 +10,9 @@ const rows: Sprite[][] = [
   [0, 1, 2, 3].map((i) => heroFrame(i / 4, false)).concat([0, 1, 2, 3, 4, 5].map((i) => heroFrame(i / 6, true))),
   [0, 1, 2, 3, 4, 5].map((i) => slimeFrame(i / 6)).concat([0, 1, 2].map((i) => kingFrame(i / 3))),
   [0, 1, 2, 3].map((i) => batFrame(i / 4)).concat([0, 1, 2, 3].map((i) => skeletonFrame(i / 4))),
-  [gemSprite(RAMPS.gemBlue), gemSprite(RAMPS.gemPink, 1.3), scrollSprite(), ...[3, 4, 6, 8, 10, 12, 20].map(dieSprite)],
+  [gemSprite(RAMPS.gemBlue), gemSprite(RAMPS.gemPink, 1.3), rockSprite(), ...[3, 4, 6, 8, 10, 12, 20].map(dieSprite)],
+  (["fire", "frost", "zap", "bonk", "poison", "ward", "mend"] as const).map((k) => scrollSprite(k)),
+  ["hourglass", "boots", "magnet", "heart", "clover", "ember", "whetstone", "prism", "lens"].map(gearSprite),
   [0, 1, 2, 3, 4, 5, 6, 7].map((i) => fireballFrame((i / 8) * Math.PI * 2, i % 3)).concat(poofFrames()),
   [...kit.trees, ...kit.bushes].map((p) => p.sprite),
   [...kit.rocks, ...kit.mushrooms, kit.stump, ...kit.grass].map((p) => p.sprite),

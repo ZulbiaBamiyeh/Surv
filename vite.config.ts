@@ -9,6 +9,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         demo: resolve(__dirname, "demo.html"),
         style: resolve(__dirname, "style-test.html"),
+        iso: resolve(__dirname, "iso.html"),
       },
       output: {
         entryFileNames: (chunk) => (chunk.name === "main" ? "game.js" : "[name].js"),

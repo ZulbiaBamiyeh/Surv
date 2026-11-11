@@ -1,27 +1,38 @@
 // Headless playtest: a simple bot plays full runs so balance can be measured.
-// Run with: npm run sim -- [runs] [maxMinutes] [maxScrolls]
-import { SCROLLS } from "../src/content";
+// Run with: npm run sim -- [runs] [maxMinutes] [style]
+//   style "random": takes any open node; "notable" (default): heads for named nodes.
+import { NODE, TREE } from "../src/content";
 import { Game } from "../src/game";
 
 const runs = Number(process.argv[2] ?? 8);
 const maxMin = Number(process.argv[3] ?? 16);
-/** How many scroll slots the bot fills; fewer means it keeps the empty-slot bonus. */
-const maxScrolls = Number(process.argv[4] ?? 3);
+const style = process.argv[4] ?? "notable";
+/** Pass "endless" to keep playing past the end of the run. */
+const endless = process.argv[5] === "endless";
 const TICK = 1 / 60;
 
-/** Kites away from nearby enemies, drifts toward gems and scrolls, circles when crowded. */
+/** Kites away from nearby enemies, drifts toward gems and scrolls, sidesteps spores. */
 function steer(g: Game) {
   const p = g.player;
   let ax = 0;
   let ay = 0;
   for (const e of g.enemies) {
+    if (e.charmT > 0) continue;
     const dx = p.x - e.x;
     const dy = p.y - e.y;
     const d2 = dx * dx + dy * dy;
     if (d2 > 110 * 110 || d2 === 0) continue;
-    const w = (e.kind === "king" ? 3 : 1) / d2;
+    const w = (e.kind === "king" || e.elite ? 3 : e.kind === "boar" && e.ai > 0 ? 4 : 1) / d2;
     ax += dx * w;
     ay += dy * w;
+  }
+  for (const sp of g.spits) {
+    const dx = p.x - sp.x;
+    const dy = p.y - 10 - sp.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > 60 * 60) continue;
+    ax += ((-sp.vy / 78) * 1.5) / Math.sqrt(d2 + 1);
+    ay += ((sp.vx / 78) * 1.5) / Math.sqrt(d2 + 1);
   }
   let best: { x: number; y: number } | null = null;
   let bd = 160 * 160;
@@ -47,15 +58,31 @@ function steer(g: Game) {
   g.input.y = y / len;
 }
 
-/** Spends points: ranks in Power first, then whatever else is open, picking forks at random. */
+/** Spends points. The "notable" bot walks toward the nearest named node, like a player with a plan. */
 function spend(g: Game) {
   const b = g.book;
   while (b.points > 0) {
     const opts = b.options();
     if (!opts.length) break;
-    const power = opts.filter((o) => o.node.id.endsWith(".power") && !SCROLLS[o.s.id].support);
-    const pick = power.length && Math.random() < 0.5 ? power[0] : opts[Math.floor(Math.random() * opts.length)];
-    b.learn(pick.s, pick.node);
+    let pick = opts[Math.floor(Math.random() * opts.length)];
+    if (style !== "random") {
+      const big = opts.filter((n) => n.kind !== "small");
+      if (big.length) pick = big[Math.floor(Math.random() * big.length)];
+      else {
+        // Step toward the closest notable that isn't taken yet
+        const goals = TREE.filter((n) => n.kind !== "small" && b.state(n) !== "taken" && b.state(n) !== "sealed");
+        let bestD = Infinity;
+        for (const o of opts)
+          for (const goal of goals) {
+            const d = Math.hypot(o.x - goal.x, o.y - goal.y);
+            if (d < bestD) {
+              bestD = d;
+              pick = o;
+            }
+          }
+      }
+    }
+    b.take(pick);
   }
 }
 
@@ -63,17 +90,20 @@ function takeScroll(g: Game) {
   const b = g.book;
   while (g.pendingScrolls > 0) {
     g.pendingScrolls--;
-    const slot = b.firstEmpty();
-    if (slot < 0 || b.owned.length >= maxScrolls) continue;
-    const pool = b.missing();
-    if (pool.length) b.put(slot, pool[Math.floor(Math.random() * pool.length)]);
+    const offers = b.offers(3);
+    const o = offers.find((x) => x.type === "scroll") ?? offers[0];
+    if (!o) b.points++;
+    else if (o.type === "scroll") b.addScroll(o.id);
+    else if (!b.addSupport(o.id)) b.addSupport(o.id, 0);
   }
 }
 
 const results: number[] = [];
+const dealt = new Map<string, number>();
+const overtime: number[] = [];
 let wins = 0;
 for (let r = 0; r < runs; r++) {
-  const g = new Game({ toast() {}, levelUp() {}, scrollFound() {}, gameOver() {} });
+  const g: Game = new Game({ toast() {}, levelUp() {}, scrollFound() {}, gameOver() {}, ...(endless ? { victory: () => g.keepGoing() } : {}) });
   let steps = 0;
   while (!g.over && g.time < maxMin * 60) {
     if (steps++ % 6 === 0) steer(g);
@@ -83,10 +113,18 @@ for (let r = 0; r < runs; r++) {
   }
   results.push(g.time);
   if (g.won) wins++;
-  const build = g.book.owned.map((s) => `${s.id}:${s.spent}`).join(" ");
+  for (const [k, v] of g.dealt) dealt.set(k, (dealt.get(k) ?? 0) + v);
+  if (endless && g.won) overtime.push(g.time - 900);
+  const notables = [...g.book.taken].map((id) => NODE.get(id)!).filter((n) => n.kind !== "small" && n.kind !== "start").length;
   const m = Math.floor(g.time / 60);
   const sec = Math.floor(g.time % 60);
-  console.log(`run ${r + 1}: ${m}:${String(sec).padStart(2, "0")}  level ${g.level}  kills ${g.kills}${g.won ? "  WON" : ""}  [${build}]`);
+  console.log(
+    `run ${r + 1}: ${m}:${String(sec).padStart(2, "0")}  level ${g.level}  kills ${g.kills}${g.won ? "  WON" : "  by " + g.lastHitBy}` +
+      `  scrolls [${[...g.book.scrolls].join(" ")}]  regions ${g.book.unsealed.size}  named nodes ${notables}`,
+  );
 }
 const avg = results.reduce((a, t) => a + t, 0) / results.length;
 console.log(`average ${Math.floor(avg / 60)}:${String(Math.floor(avg % 60)).padStart(2, "0")}, wins ${wins}/${runs}`);
+if (endless) console.log("overtime survived:", overtime.map((t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`).join(" "));
+const total = [...dealt.values()].reduce((a, v) => a + v, 0) || 1;
+console.log("damage share:", [...dealt].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, v]) => `${k} ${Math.round((v / total) * 100)}%`).join(", "));

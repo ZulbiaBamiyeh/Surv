@@ -1,5 +1,7 @@
 // Dev-only sprite sheet: open /art-preview.html on the dev server to inspect the art up close.
 import { batFrame, heroFrame, kingFrame, skeletonFrame, slimeFrame } from "./characters";
+import { JELLY, boarFrame, ghostFrame, golemFrame, shroomFrame, snowmanFrame, totemFrame, yetiFrame } from "./creatures";
+import { carrotSprite, chestSprite, magnetSprite, sunSprite } from "./items";
 import { dieSprite, fireballFrame, gearSprite, gemSprite, poofFrames, rockSprite, scrollSprite } from "./items";
 import type { Sprite } from "./painter";
 import { RAMPS } from "./palette";
@@ -10,6 +12,8 @@ const rows: Sprite[][] = [
   [0, 1, 2, 3].map((i) => heroFrame(i / 4, false)).concat([0, 1, 2, 3, 4, 5].map((i) => heroFrame(i / 6, true))),
   [0, 1, 2, 3, 4, 5].map((i) => slimeFrame(i / 6)).concat([0, 1, 2].map((i) => kingFrame(i / 3))),
   [0, 1, 2, 3].map((i) => batFrame(i / 4)).concat([0, 1, 2, 3].map((i) => skeletonFrame(i / 4))),
+  [ghostFrame(0), ghostFrame(0.5), shroomFrame(0), shroomFrame(0, true), slimeFrame(0, JELLY, 1.35), boarFrame(0), boarFrame(0.5, true), golemFrame(0)],
+  [totemFrame(0), totemFrame(0.3, true), snowmanFrame(0), yetiFrame(0), magnetSprite(), carrotSprite(), chestSprite(), sunSprite()],
   [gemSprite(RAMPS.gemBlue), gemSprite(RAMPS.gemPink, 1.3), rockSprite(), ...[3, 4, 6, 8, 10, 12, 20].map(dieSprite)],
   (["fire", "frost", "zap", "bonk", "poison", "ward", "mend"] as const).map((k) => scrollSprite(k)),
   ["hourglass", "boots", "magnet", "heart", "clover", "ember", "whetstone", "prism", "lens"].map(gearSprite),

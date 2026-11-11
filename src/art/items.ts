@@ -260,7 +260,7 @@ function emblem(p: Painter, kind: Emblem, cx: number, cy: number) {
   }
 }
 
-export function scrollSprite(kind: Emblem = "fire"): Sprite {
+export function scrollSprite(kind: Emblem = "fire", seal?: Ramp): Sprite {
   const W = 20;
   const H = 30;
   const p = new Painter(W, H);
@@ -280,12 +280,12 @@ export function scrollSprite(kind: Emblem = "fire"): Sprite {
     p.ellipsoid(2, ry, 1.6, 1.8, R.wood, { sep: 0.2 });
     p.ellipsoid(18, ry, 1.6, 1.8, R.wood, { sep: 0.2 });
   }
-  emblem(p, kind, 10, 12);
+  if (SEALS[kind]) emblem(p, kind, 10, 12);
   for (let x = 6; x <= 14; x++) {
     p.nudge(x, 20, -2);
     if (x < 12) p.nudge(x, 22, -2);
   }
-  p.ellipsoid(14.5, 26.5, 2.2, 2.2, SEALS[kind], { spec: 0.85, sep: 0.2 });
+  p.ellipsoid(14.5, 26.5, 2.2, 2.2, seal ?? SEALS[kind], { spec: 0.85, sep: 0.2 });
   return p.bake();
 }
 
@@ -484,4 +484,75 @@ export function moonSprite(big: boolean): Sprite {
   const craters: [number, number, number][] = big ? [[0.3, 0.2, 1.6], [-0.35, 0.35, 1.1], [0.1, -0.4, 0.9]] : [[0.3, 0.25, 0.9], [-0.3, 0.1, 0.7]];
   for (const [u, v, cr] of craters) p.ellipsoid(c + u * r, c + v * r, cr, cr, MOON, { bias: -0.35 });
   return p.bake();
+}
+
+// ---------- Pickups ----------
+
+/** A red horseshoe magnet with silver tips. */
+export function magnetSprite(): Sprite {
+  const p = new Painter(14, 14);
+  const red = RAMPS.red;
+  const silver = RAMPS.ivory;
+  p.fill(
+    (x, y) => {
+      const d = Math.hypot(x - 7, y - 6);
+      return (y <= 6 && d <= 6.2 && d >= 2.6) || (y > 6 && y < 12.5 && ((x > 0.8 && x < 4.4) || (x > 9.6 && x < 13.2)));
+    },
+    red,
+    (x, y) => (y <= 6 ? lightOf((x - 7) / 6, (y - 6) / 6, 0.6) : x < 7 ? 0.75 - (x - 0.8) * 0.08 : 0.5 - (x - 9.6) * 0.08),
+    { sep: 0.2 },
+  );
+  p.fill((x, y) => y >= 10 && y < 12.5 && ((x > 0.8 && x < 4.4) || (x > 9.6 && x < 13.2)), silver, (x) => (x < 7 ? 0.85 : 0.6));
+  p.dot(4, 2, "#ffffff");
+  return p.bake();
+}
+
+/** A crunchy carrot. */
+export function carrotSprite(): Sprite {
+  const p = new Painter(10, 15);
+  const o: Ramp = ["#5a1a0a", "#b8401a", "#f07a24", "#ffa848", "#ffd890"];
+  p.fill(
+    (x, y) => y > 4 && y < 14.5 && Math.abs(x - 5) <= 3 * (1 - (y - 4.5) / 10.5) + 0.3,
+    o,
+    (x, y) => 0.75 - ((x - 5) / 3) * 0.3 - (y - 4) * 0.01,
+  );
+  for (const y of [7, 10, 12]) p.nudge(y === 10 ? 6 : 4, y, -2);
+  const g: Ramp = ["#0f2a14", "#1e5a24", "#3a9a2a", "#7ad040", "#c8f080"];
+  p.rod(5, 4.5, 3, 0.5, 0.8, g);
+  p.rod(5, 4.5, 5.5, 0.3, 0.8, g);
+  p.rod(5, 4.5, 8, 1.2, 0.8, g, { bias: -0.1 });
+  return p.bake();
+}
+
+/** A little treasure chest. */
+export function chestSprite(): Sprite {
+  const p = new Painter(18, 15);
+  const W = RAMPS.wood;
+  const G = RAMPS.gold;
+  p.fill((x, y) => x > 1 && x < 17 && y > 6 && y < 14.5, W, (x) => 0.75 - (x - 1) * 0.025);
+  p.fill((x, y) => x > 1 && x < 17 && y > 1 && y <= 6 && Math.hypot((x - 9) / 8, (y - 6) / 5) <= 1.02, W, (x, y) => lightOf((x - 9) / 8, (y - 6) / 5, 0.6), { sep: 0.25 });
+  p.fill((x, y) => x > 1 && x < 17 && y > 5.6 && y < 7.4, G, (x) => 0.8 - (x - 1) * 0.02);
+  for (const bx of [3.5, 14.5]) p.fill((x, y) => Math.abs(x - bx) < 1 && y > 1.5 && y < 14.5, G, () => 0.65);
+  p.fill((x, y) => Math.abs(x - 9) < 1.6 && y > 6 && y < 10, G, () => 0.95);
+  p.dot(9, 9, OUTLINE);
+  p.dot(6, 3, "#ffffff");
+  return p.bake();
+}
+
+/** A small, bright sun for Little Suns. */
+export function sunSprite(): Sprite {
+  const p = new Painter(13, 13);
+  p.glow((x, y) => {
+    const a = Math.atan2(y - 6.5, x - 6.5);
+    const r = Math.hypot(x - 6.5, y - 6.5);
+    return r < 3.8 || (r < 6.2 && Math.cos(a * 8) > 0.55);
+  }, RAMPS.fire, (x, y) => 1.05 - Math.hypot(x - 6.5, y - 6.5) / 6.5);
+  return p.bake();
+}
+
+/** A scroll whose emblem is a glyph, for scrolls without a hand-painted emblem. */
+export function glyphScroll(icon: HTMLCanvasElement, seal: Ramp): Sprite {
+  const s = scrollSprite("blank" as Emblem, seal);
+  for (const c of [s.n]) c.getContext("2d")!.drawImage(icon, 5, 7);
+  return s;
 }

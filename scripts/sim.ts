@@ -1,7 +1,7 @@
 // Headless playtest: a simple bot plays full runs so balance can be measured.
 // Run with: npm run sim -- [runs] [maxMinutes] [style]
 //   style "random": takes any open node; "notable" (default): heads for named nodes.
-import { NODE, TREE } from "../src/content";
+import { ELEMENTS, NODE, TREE } from "../src/content";
 import { Game } from "../src/game";
 
 const runs = Number(process.argv[2] ?? 8);
@@ -91,10 +91,8 @@ function takeScroll(g: Game) {
   while (g.pendingScrolls > 0) {
     g.pendingScrolls--;
     const offers = b.offers(3);
-    const o = offers.find((x) => x.type === "scroll") ?? offers[0];
-    if (!o) b.points++;
-    else if (o.type === "scroll") b.addScroll(o.id);
-    else if (!b.addSupport(o.id)) b.addSupport(o.id, 0);
+    if (!offers.length) b.points++;
+    else b.addScroll(offers[0]);
   }
 }
 
@@ -103,7 +101,8 @@ const dealt = new Map<string, number>();
 const overtime: number[] = [];
 let wins = 0;
 for (let r = 0; r < runs; r++) {
-  const g: Game = new Game({ toast() {}, levelUp() {}, scrollFound() {}, gameOver() {}, ...(endless ? { victory: () => g.keepGoing() } : {}) });
+  const start = ELEMENTS[r % ELEMENTS.length];
+  const g: Game = new Game({ toast() {}, levelUp() {}, scrollFound() {}, gameOver() {}, ...(endless ? { victory: () => g.keepGoing() } : {}) }, start);
   let steps = 0;
   while (!g.over && g.time < maxMin * 60) {
     if (steps++ % 6 === 0) steer(g);
@@ -119,10 +118,16 @@ for (let r = 0; r < runs; r++) {
   const m = Math.floor(g.time / 60);
   const sec = Math.floor(g.time % 60);
   console.log(
-    `run ${r + 1}: ${m}:${String(sec).padStart(2, "0")}  level ${g.level}  kills ${g.kills}${g.won ? "  WON" : "  by " + g.lastHitBy}` +
+    `run ${r + 1} ${start.padEnd(5)}: ${m}:${String(sec).padStart(2, "0")}  level ${g.level}  kills ${g.kills}${g.won ? "  WON" : "  by " + g.lastHitBy}` +
       `  scrolls [${[...g.book.scrolls].join(" ")}]  regions ${g.book.unsealed.size}  named nodes ${notables}`,
   );
 }
+const byEl = new Map<string, number[]>();
+results.forEach((t, i) => {
+  const el = ELEMENTS[i % ELEMENTS.length];
+  byEl.set(el, [...(byEl.get(el) ?? []), t]);
+});
+console.log("by element:", [...byEl].map(([el, ts]) => `${el} ${Math.floor(ts.reduce((a, b) => a + b, 0) / ts.length / 60)}:${String(Math.floor((ts.reduce((a, b) => a + b, 0) / ts.length) % 60)).padStart(2, "0")}`).join(", "));
 const avg = results.reduce((a, t) => a + t, 0) / results.length;
 console.log(`average ${Math.floor(avg / 60)}:${String(Math.floor(avg % 60)).padStart(2, "0")}, wins ${wins}/${runs}`);
 if (endless) console.log("overtime survived:", overtime.map((t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`).join(" "));

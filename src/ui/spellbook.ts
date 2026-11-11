@@ -1,23 +1,22 @@
-import { Art, SCROLL_GLYPH, spriteURL } from "../art";
+import { Art, spriteURL } from "../art";
 import { glyphURL } from "../art/glyphs";
-import type { Book, ScrollOffer as Offer } from "../book";
-import { entryOf } from "../book";
-import {
-  NODE, REGIONS, RegionDef, SCROLLS, START, SUPPORTS, ScrollId, SupportId, TREE, TreeNode, opensWith,
-} from "../content";
+import type { Book } from "../book";
+import { ELEMENTS, NODE, REGIONS, RegionDef, SCROLLS, ScrollId, TREE, TreeNode, entryOf, opensWith } from "../content";
 import type { Game } from "../game";
 
 // The spellbook: one big tree you can drag around and pinch to zoom, with a details
 // drawer and a Learn button. Built for thumbs first.
 
 const U = 48; // pixels per tree unit at zoom 1
-const HALF = 21; // the tree spans about ±21 units
-const SIZE: Record<TreeNode["kind"], number> = { small: 26, notable: 40, keystone: 48, entry: 42, start: 46 };
-const KIND_LABEL: Record<TreeNode["kind"], string> = { small: "", notable: "Notable", keystone: "Keystone", entry: "Free with its scrolls", start: "Your first spell" };
+const HALF = 42; // the tree spans about ±42 units
+/** How zoomed in the tree starts. Lower shows more of it. */
+const START_ZOOM = 0.42;
+const SIZE: Record<TreeNode["kind"], number> = { small: 32, notable: 44, keystone: 50, entry: 46, start: 50 };
+const KIND_LABEL: Record<TreeNode["kind"], string> = { small: "", notable: "Notable", keystone: "Keystone", entry: "Free with its scrolls", start: "An element's first spell" };
 
 const px = (n: TreeNode) => ({ x: (n.x + HALF) * U, y: (n.y + HALF) * U });
 const needsText = (r: RegionDef) => r.needs.map((n) => SCROLLS[n].short).join(" + ");
-const colorOf = (n: TreeNode) => (n.region ? REGIONS.get(n.region)!.color : n.kind === "keystone" ? "#ff6a8a" : "#ffb04a");
+const colorOf = (n: TreeNode) => (n.kind === "keystone" ? "#ff6a8a" : REGIONS.get(n.region)!.color);
 
 export class Spellbook {
   readonly root: HTMLElement;
@@ -25,7 +24,8 @@ export class Spellbook {
   private selected: TreeNode | null = null;
   private headline = "";
   private history: TreeNode[] = [];
-  private view = { x: 0, y: 0, z: 1 };
+  private view = { x: 0, y: 0, z: START_ZOOM };
+  private opened = false;
   private icons = new Map<string, string>();
   private els: {
     title: HTMLElement; points: HTMLElement; stats: HTMLElement; viewport: HTMLElement; world: HTMLElement; svg: SVGSVGElement;
@@ -80,7 +80,7 @@ export class Spellbook {
     this.root.querySelectorAll<HTMLButtonElement>("[data-z]").forEach((b) =>
       b.addEventListener("click", () => {
         const z = b.dataset.z;
-        if (z === "home") this.focus(NODE.get(START)!, 1);
+        if (z === "home") this.focus(NODE.get(entryOf(this.book.start))!, START_ZOOM);
         else this.zoomAt(z === "in" ? 1.3 : 1 / 1.3);
       }),
     );
@@ -106,9 +106,13 @@ export class Spellbook {
     this.history = [];
     const b = this.book;
     // Start on something worth learning
-    if (!this.selected || b.points > 0) this.selected = this.suggest() ?? this.selected ?? NODE.get(START)!;
+    if (!this.selected || !b.has(this.selected.id) || b.points > 0) this.selected = this.suggest() ?? NODE.get(entryOf(b.start))!;
     this.render();
-    requestAnimationFrame(() => this.focus(this.selected!, this.view.z || 1));
+    if (!this.opened) {
+      this.opened = true;
+      this.view.z = START_ZOOM;
+    }
+    requestAnimationFrame(() => this.focus(this.selected!, this.view.z));
   }
 
   close() {
@@ -120,7 +124,11 @@ export class Spellbook {
   private suggest(): TreeNode | null {
     const opts = this.book.options();
     if (!opts.length) return null;
-    return opts.sort((a, b) => Number(a.kind === "small") - Number(b.kind === "small") || Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y))[0];
+    // Prefer named nodes, then whatever is closest to where you started
+    const home = NODE.get(entryOf(this.book.start))!;
+    const d = (n: TreeNode) => Math.hypot(n.x - home.x, n.y - home.y);
+    const rank = (n: TreeNode) => (n.kind === "notable" ? 0 : n.kind === "small" ? 1 : 2);
+    return opts.sort((a, b) => rank(a) - rank(b) || d(a) - d(b))[0];
   }
 
   private undo() {
@@ -276,7 +284,7 @@ export class Spellbook {
   private zoomAt(k: number, cx?: number, cy?: number) {
     const box = this.els.viewport.getBoundingClientRect();
     const v = this.view;
-    const z = Math.max(0.3, Math.min(2.2, v.z * k));
+    const z = Math.max(0.15, Math.min(2, v.z * k));
     const ax = cx ?? box.width / 2;
     const ay = cy ?? box.height / 2;
     v.x = ax - ((ax - v.x) * z) / v.z;
@@ -339,7 +347,23 @@ export class Spellbook {
   }
 }
 
-/** The "you found a scroll" picker, including choosing a support slot to replace. */
+/** What a scroll opens, as HTML for a card. */
+function scrollBlurb(id: ScrollId, b: Book) {
+  const opens = opensWith(id, b.scrolls);
+  const main = opens.find((r) => r.needs.length === 1) ?? opens[0];
+  const more = opens.filter((r) => r !== main);
+  let body = main
+    ? `Opens <b>${main.name}</b>: ${NODE.get(entryOf(main.id))!.desc}${more.length ? ` <b>Also opens ${more.map((r) => r.name).join(", ")}!</b>` : ""}`
+    : "Opens nothing yet on its own.";
+  const later = [...REGIONS.values()].filter((r) => r.needs.includes(id) && !opens.includes(r)).sort((x, y) => x.needs.length - y.needs.length).slice(0, 3);
+  if (later.length)
+    body += `<small>Later, with ${later.map((r) => `${r.needs.filter((n) => n !== id && !b.scrolls.has(n)).map((n) => SCROLLS[n].short).join(" + ")}: ${r.name}`).join(" · ")}</small>`;
+  return body;
+}
+
+const KIND_TAG: Record<string, string> = { element: "<em>Element</em>", branch: "", support: "<em>Support</em>", niche: "<em class='niche'>Rare</em>" };
+
+/** The "you found a scroll" picker. */
 export class ScrollOffer {
   readonly root: HTMLElement;
   isOpen = false;
@@ -369,77 +393,20 @@ export class ScrollOffer {
         <button class="btn ghost skip" type="button">Leave it</button>
       </div>`;
     const list = this.root.querySelector(".offers")!;
-    for (const o of offers) list.appendChild(this.card(o));
-    this.root.querySelector(".skip")!.addEventListener("click", () => this.finish("", []));
-  }
-
-  private card(o: Offer) {
-    const b = this.book();
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "offer";
-    let title = "";
-    let body = "";
-    let tag = "";
-    if (o.type === "scroll") {
-      const def = SCROLLS[o.id];
-      card.style.setProperty("--c", def.color);
-      title = def.name;
-      const opens = opensWith(o.id, b.scrolls);
-      const later = [...REGIONS.values()].filter((r) => r.needs.includes(o.id) && !opens.includes(r)).slice(0, 3);
-      const main = opens.find((r) => r.needs.length === 1) ?? opens[0];
-      const more = opens.filter((r) => r !== main);
-      body = main
-        ? `Opens <b>${main.name}</b>: ${NODE.get(entryOf(main.id))!.desc}${more.length ? ` <b>Also opens ${more.map((r) => r.name).join(", ")}!</b>` : ""}`
-        : "Opens nothing yet on its own.";
-      if (later.length) body += `<small>Later, with ${later.map((r) => `${r.needs.filter((n) => n !== o.id && !b.scrolls.has(n)).map((n) => SCROLLS[n].short).join(" + ")}: ${r.name}`).join(" · ")}</small>`;
-      tag = def.niche ? "<em class='niche'>Rare</em>" : "";
-    } else {
-      const def = SUPPORTS[o.id];
-      const lv = b.support(o.id);
-      card.style.setProperty("--c", def.color);
-      title = lv ? `${def.name} · level ${lv + 1}` : def.name;
-      body = def.levels[lv];
-      tag = "<em>Support</em>";
-    }
-    card.innerHTML = `<img src="${this.icons.get(o.id)}" alt="" class="px"><span class="o-text"><b>${title}</b><span>${body}</span>${tag}</span>`;
-    card.addEventListener("click", () => this.take(o));
-    return card;
-  }
-
-  private take(o: Offer) {
-    const b = this.book();
-    if (o.type === "scroll") {
-      const opened = b.addScroll(o.id);
-      this.finish(opened.length ? `${opened.map((r) => r.name).join(" and ")} unsealed!` : `${SCROLLS[o.id].name} added.`, opened);
-      return;
-    }
-    if (b.addSupport(o.id)) {
-      this.finish(`${SUPPORTS[o.id].name} ${b.support(o.id) > 1 ? `is now level ${b.support(o.id)}` : "added"}.`, []);
-      return;
-    }
-    // Both support slots are full: choose one to swap out
-    const panel = this.root.querySelector(".sheet-panel")!;
-    panel.innerHTML = `
-      <header class="sheet-head"><div><h2>Both support slots are full</h2><span class="book-points">Swap one out for ${SUPPORTS[o.id].name}.</span></div></header>
-      <div class="offers"></div>
-      <button class="btn ghost skip" type="button">Keep what I have</button>`;
-    const list = panel.querySelector(".offers")!;
-    b.supports.forEach((s, i) => {
-      if (!s) return;
-      const def = SUPPORTS[s.id];
+    for (const id of offers) {
+      const def = SCROLLS[id];
       const card = document.createElement("button");
       card.type = "button";
       card.className = "offer";
       card.style.setProperty("--c", def.color);
-      card.innerHTML = `<img src="${this.icons.get(s.id)}" alt="" class="px"><span class="o-text"><b>Swap out ${def.name}</b><span>Level ${s.level}</span></span>`;
+      card.innerHTML = `<img src="${this.icons.get(id)}" alt="" class="px"><span class="o-text"><b>${def.name}</b><span>${scrollBlurb(id, b)}</span>${KIND_TAG[def.kind]}</span>`;
       card.addEventListener("click", () => {
-        b.addSupport(o.id, i);
-        this.finish(`${SUPPORTS[o.id].name} added.`, []);
+        const opened = b.addScroll(id);
+        this.finish(opened.length ? `${opened.map((r) => r.name).join(" and ")} unsealed!` : `${def.name} added.`, opened);
       });
       list.appendChild(card);
-    });
-    panel.querySelector(".skip")!.addEventListener("click", () => this.finish("", []));
+    }
+    this.root.querySelector(".skip")!.addEventListener("click", () => this.finish("", []));
   }
 
   private finish(msg: string, opened: RegionDef[]) {
@@ -449,4 +416,49 @@ export class ScrollOffer {
   }
 }
 
-export const scrollGlyph = (id: ScrollId | SupportId) => SCROLL_GLYPH[id];
+/** Starting spells, shown when you pick your element. */
+const START_TEXT: Record<string, string> = {
+  fire: "Fireballs at the nearest enemy. Big damage, burning, explosions.",
+  frost: "Piercing ice shards that slow enemies down. Freeze, shatter, build snowmen.",
+  storm: "Lightning that jumps between enemies. Great against crowds.",
+  toxic: "Lobbed globs that leave poison puddles. Slow, spreading, sneaky damage.",
+  moon: "Moons that circle you and bonk anything close. Tanky and steady.",
+};
+
+/** The run-start picker: choose one of three elements to start on. */
+export class StartPicker {
+  readonly root: HTMLElement;
+  isOpen = false;
+
+  constructor(private art: Art, private onPick: (id: ScrollId) => void) {
+    this.root = document.createElement("div");
+    this.root.className = "sheet offer-sheet start-sheet";
+    this.root.hidden = true;
+  }
+
+  open() {
+    this.isOpen = true;
+    this.root.hidden = false;
+    const choices = [...ELEMENTS].sort(() => Math.random() - 0.5).slice(0, 3);
+    this.root.innerHTML = `
+      <div class="sheet-panel short" role="dialog" aria-label="Choose your magic">
+        <header class="sheet-head"><div><h2>Choose your magic</h2><span class="book-points">Your run starts in this element's part of the tree. Scrolls you find open the rest.</span></div></header>
+        <div class="offers"></div>
+      </div>`;
+    const list = this.root.querySelector(".offers")!;
+    for (const id of choices) {
+      const def = SCROLLS[id];
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "offer";
+      card.style.setProperty("--c", def.color);
+      card.innerHTML = `<img src="${spriteURL(this.art.scrolls.get(id)!, 3)}" alt="" class="px"><span class="o-text"><b>${def.short}</b><span>${START_TEXT[id]}</span></span>`;
+      card.addEventListener("click", () => {
+        this.isOpen = false;
+        this.root.hidden = true;
+        this.onPick(id);
+      });
+      list.appendChild(card);
+    }
+  }
+}

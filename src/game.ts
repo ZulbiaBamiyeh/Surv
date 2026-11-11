@@ -1,6 +1,6 @@
 import { Book } from "./book";
 import { CFG, EnemyKind } from "./config";
-import { ELEMENTS, N, Stats, SupportId } from "./content";
+import { ELEMENTS, N, ScrollId, Stats } from "./content";
 
 export type Sfx =
   | "shoot" | "ring" | "ice" | "zap" | "plop" | "meteor" | "hit" | "pop" | "gem" | "level" | "hurt" | "pickup" | "magnet"
@@ -45,6 +45,9 @@ export interface Enemy {
   moonT: number;
   zapT: number;
   stormHit: boolean;
+  /** Cooldowns for Deep Freeze and walking through trails. */
+  freezeCd: number;
+  trailT: number;
   /** Golden elites are much tougher and drop a treasure chest. */
   elite: boolean;
   /** Behavior state for boars (0 chase, 1 wind up, 2 charge, 3 rest) and shooters. */
@@ -65,7 +68,7 @@ export interface Shot {
   pierce: number;
   hit: Enemy[];
   dead: boolean;
-  kind: "fire" | "orb" | "snow" | "carrot" | "spore";
+  kind: "fire" | "orb" | "snow" | "carrot" | "spore" | "shard" | "glob";
   src: string;
   el: El;
   green: boolean;
@@ -80,6 +83,8 @@ export interface Nova { x: number; y: number; t: number; r: number; damage: numb
 export interface Flames { x: number; y: number; r: number; t: number; dur: number; tick: number; damage: number; theme: Theme; src: string; bloom: boolean; dead: boolean; }
 export interface Meteor { x: number; y: number; t: number; fall: number; r: number; damage: number; kind: "rock" | "hail" | "giant"; dead: boolean; }
 export interface Totem { kind: "fire" | "snow"; x: number; y: number; t: number; dur: number; castT: number; zapT: number; stompT: number; hp: number; maxHp: number; dead: boolean; }
+/** A path of fire or poison left behind as you walk. */
+export interface Trail { theme: Theme; src: string; pts: { x: number; y: number; t: number }[]; }
 export interface BlackHole { x: number; y: number; t: number; dur: number; r: number; damage: number; tick: number; dead: boolean; }
 export interface Bolt { pts: [number, number][]; t: number; dead: boolean; }
 /** An enemy projectile (mushroom spores). */
@@ -114,20 +119,12 @@ function compact<T extends { dead: boolean }>(arr: T[]) {
   arr.length = j;
 }
 
-/** Support scroll numbers by level (index 0 = level 1). */
-const SUP = {
-  confuse: { every: [9, 7, 5], dur: [3, 4, 4], radius: [55, 55, 75] },
-  charm: { every: [12, 10, 10], dur: [8, 8, 10], count: [1, 1, 2], hit: [0.06, 0.18, 0.18] },
-  moonlight: { every: [25, 20, 15], heal: [0.12, 0.16, 0.2] },
-  ward: { every: [20, 17, 14], dur: [3, 4, 5] },
-  swift: { move: [0.15, 0.25, 0.35] },
-};
-
 /** Timers for everything that fires on its own schedule. */
 const TIMERS = {
   cast: 0.4, ring: 1, trail: 0, meteor: 2, totem: 1, frost: 1.5, pals: 3, zap: 1, call: 1, toxic: 1.5, hail: 2, eclipse: 20,
   lunar: 22, aurora: 20, weather: 6, carrot: 1, hole: 12, gambler: 15, stopwatch: 20, blackhole: 4, midnight: 40,
   cataclysm: 30, paradox: 25, moondrip: 2, acid: 0, rewind: 0, history: 0, jackpot: 0,
+  shard: 0.4, charm: 4, dust: 3, mend: 8, bubble: 3, beam: 3, constel: 0, rod: 12, miasma: 0, trailTox: 0,
 };
 type TimerId = keyof typeof TIMERS;
 
@@ -157,8 +154,10 @@ export class Game {
     inv: 0, moving: false, face: 1, walkT: 0, ward: 0,
     /** Seconds left underground (Rabbit Hole). */
     under: 0,
+    revived: false,
   };
-  book = new Book();
+  book: Book;
+  trails: Trail[] = [];
   enemies: Enemy[] = [];
   shots: Shot[] = [];
   novas: Nova[] = [];
@@ -202,14 +201,18 @@ export class Game {
   private moonAngle = 0;
   private novaT = 6;
   private T: Record<TimerId, number> = { ...TIMERS };
-  private sup: Record<SupportId, number> = { confuse: 3, charm: 4, moonlight: 8, ward: 3, swift: 0, clover: 0 };
+  private zaps = 0;
+  private extraMoons = 0;
+  private prevWard = 0;
   private hpBonus = 0;
   private history: { x: number; y: number; hp: number }[] = [];
   /** What is dealing damage right now, for the damage summary. */
   private src = "Fireball";
   private el: El = "fire";
 
-  constructor(private events: GameEvents) {}
+  constructor(private events: GameEvents, start: ScrollId = "fire") {
+    this.book = new Book(start);
+  }
 
   get xpNeeded() {
     const l = this.level - 1;
@@ -222,26 +225,22 @@ export class Game {
   has(id: string) {
     return this.book.has(id);
   }
-  lv(id: SupportId) {
-    return this.book.support(id);
-  }
   /** On-screen rectangle check, for screen-wide effects. */
   private onScreen(e: Enemy) {
     return Math.abs(e.x - this.player.x) < this.viewW / 2 + 10 && Math.abs(e.y - this.player.y) < this.viewH / 2 + 10;
   }
 
   get moveMul() {
-    const s = this.lv("swift");
-    return (1 + this.stats.move + (s ? SUP.swift.move[s - 1] : 0)) * (this.fullMoon ? 1.2 : 1);
+    return Math.max(0.5, 1 + this.stats.move) * (this.fullMoon ? 1.2 : 1);
   }
   get pickupMul() {
-    return 1 + this.stats.pickup + (this.lv("swift") >= 3 ? 0.3 : 0) + (this.lv("clover") >= 2 ? 0.5 : 0);
+    return 1 + this.stats.pickup;
   }
   get luck() {
-    return this.lv("clover") ? 1 : 0;
+    return this.has("clover") ? 1 : 0;
   }
   get dropMul() {
-    return this.lv("clover") >= 3 ? 2 : 1;
+    return this.has("clover") ? 1.6 : 1;
   }
 
   /** Real die size: Loaded Dice adds two sides. */
@@ -285,7 +284,7 @@ export class Game {
   }
   /** Cooldown multiplier. */
   get cd() {
-    return 1 / (1 + this.stats.haste) / (this.has("overflow") ? 1.25 : 1);
+    return 1 / (1 + this.stats.haste) / (this.has("avatar") ? 1.25 : 1);
   }
   get areaMul() {
     return 1 + this.stats.area;
@@ -300,7 +299,7 @@ export class Game {
     return this.has("verdant");
   }
   get fireballDamage() {
-    return 14 * this.power * (this.has(N.scatter) ? 0.7 : 1) * (this.has(N.heavyOrb) ? 2.5 : 1) * (this.has(N.wildfire) ? 0.75 : 1) * (this.has(N.patient) ? 2 : 1);
+    return 12 * this.power * (this.has(N.scatter) ? 0.7 : 1) * (this.has(N.heavyOrb) ? 2.5 : 1) * (this.has(N.wildfire) ? 0.75 : 1) * (this.has(N.patient) ? 2 : 1);
   }
   get fireballCooldown() {
     return 0.7 * this.cd * (this.has(N.heavyOrb) ? 1.6 : 1) * (this.has(N.patient) ? 1.4 : 1);
@@ -309,34 +308,37 @@ export class Game {
   get meteorDamage() { return 30 * this.power * (1 + this.stats.meteor); }
   get sunDamage() { return 8 * this.power * (1 + this.stats.sun) * (this.dark > 0 && this.has("corona") ? 3 : 1); }
   get totemDamage() { return 10 * this.power * (1 + this.stats.totem); }
-  get frostDamage() { return 11 * this.power * (1 + this.stats.frost); }
-  get stormDamage() { return 12 * this.power * (1 + this.stats.storm); }
-  get toxicDamage() { return 6 * this.power * (1 + this.stats.toxic); }
-  get moonDamage() { return 9 * this.power * (1 + this.stats.moon) * (this.dark > 0 && this.has("corona") ? 3 : 1); }
+  get frostDamage() { return 11 * this.power * (1 + this.stats.frost) * (this.has("permafrost") ? 0.6 : 1); }
+  get shardDamage() { return this.frostDamage * 1.25; }
+  get stormDamage() { return 12 * this.power * (1 + this.stats.storm) * (this.has("rod") ? 1.8 : 1) * (this.has("conductor") ? 0.7 : 1); }
+  get toxicDamage() { return 8 * this.power * (1 + this.stats.toxic); }
+  get moonDamage() {
+    return 12 * this.power * (1 + this.stats.moon) * (this.dark > 0 && this.has("corona") ? 3 : 1) * (this.has("bloodmoon") ? 2 : 1) * (this.has("gravmoon") ? 0.7 : 1);
+  }
+  get puddleSize() { return 22 * this.areaMul * (this.has("plague") ? 1.6 : 1); }
   get carrotDamage() { return 16 * this.power * (1 + this.stats.carrot); }
 
   /** Numbers shown at the top of the spellbook, as [label, value] pairs. */
   spellStats(): [string, string][] {
     const n = (v: number) => (v >= 10 ? Math.round(v).toString() : v.toFixed(1));
-    const sec = (v: number) => v.toFixed(2).replace(/0$/, "") + "s";
-    const out: [string, string][] = [
-      ["Fireball", n(this.has(N.ember) ? 0 : this.fireballDamage) + (this.has(N.scatter) ? ` ×1d${this.die(4)}` : "")],
-      ["Every", sec(this.fireballCooldown)],
-    ];
-    const burns = this.has(N.ignite) || this.has("suns") || this.has("rot") || this.has("plasma");
+    const out: [string, string][] = [];
+    if (this.has("fireball")) out.push(["Fireball", (this.has(N.ember) ? "0" : n(this.fireballDamage)) + (this.has(N.scatter) ? ` ×1d${this.die(4)}` : "")]);
+    if (this.has("shard")) out.push(["Ice Shard", n(this.shardDamage) + (this.has("fan") ? " ×3" : "")]);
+    if (this.has("storm")) out.push(["Lightning", n(this.stormDamage) + (this.has("forked") ? ` ×1d${this.die(6)}+1` : " ×4")]);
+    if (this.has("toxic")) out.push(["Poison", n(this.toxicDamage) + "/½s" + (this.has("spores") ? ` ×1d${this.die(3)}` : "")]);
+    if (this.has("moon")) out.push(["Moons", `${n(this.moonDamage)} ×${3 + (this.has("full") ? 1 : 0)}${this.has("constellation") ? `+1d${this.die(4)}` : ""}`]);
+    const burns = this.has(N.ignite) || this.has("suns") || this.has("rot") || this.has("plasma") || this.has("harvest") || this.has("fumes");
     if (burns) out.push(["Burn", `${Math.round(20 * this.burnMul)}%/s`]);
     if (this.has(N.fireRing)) out.push(["Fire Ring", n(this.ringDamage)]);
+    if (this.has("frost")) out.push(["Frost Nova", n(this.frostDamage) + (this.has("ripples") ? ` ×1d${this.die(3)}` : "")]);
     if (this.has("meteor")) out.push(["Meteor", n(this.meteorDamage) + (this.has("shower") ? ` ×1d${this.die(3)}` : "")]);
     if (this.has("suns")) out.push(["Suns", `${n(this.sunDamage)} ×${this.has("flare") ? 4 : 2}`]);
     if (this.has("totem")) out.push(["Totem", n(this.totemDamage) + (this.has("twin") ? " ×2" : "")]);
-    if (this.has("frost")) out.push(["Frost Nova", n(this.frostDamage)]);
-    if (this.has("storm")) out.push(["Lightning", n(this.stormDamage) + (this.has("forked") ? ` ×1d${this.die(6)}+1` : " ×3")]);
-    if (this.has("moon")) out.push(["Moons", `${n(this.moonDamage)} ×${this.has("full") ? "2+1" : 2}`]);
-    if (this.has("toxic")) out.push(["Poison", n(this.toxicDamage) + "/½s"]);
     if (this.has("carrots")) out.push(["Carrots", n(this.carrotDamage)]);
+    out.push(["Cast speed", `+${Math.round((1 / this.cd - 1) * 100)}%`]);
     if (this.stats.area) out.push(["Area", `+${Math.round(this.stats.area * 100)}%`]);
-    out.push(["Health", String(Math.round(CFG.player.maxHp + this.stats.hp))]);
-    if (this.moveMul > 1) out.push(["Speed", `+${Math.round((this.moveMul - 1) * 100)}%`]);
+    out.push(["Health", String(Math.round(Math.max(20, CFG.player.maxHp + this.stats.hp)))]);
+    if (this.moveMul !== 1) out.push(["Speed", `${this.moveMul > 1 ? "+" : ""}${Math.round((this.moveMul - 1) * 100)}%`]);
     return out;
   }
 
@@ -370,7 +372,7 @@ export class Game {
     this.buildHash();
     this.updateEnemies(dt);
     this.updateSpits(dt);
-    this.updateSupports(dt);
+    this.updateSupports();
     this.updateSpells(dt);
     this.updateWorldMagic(dt);
     this.updateShots(dt);
@@ -481,7 +483,8 @@ export class Game {
   private hurt(amount: number, by = "") {
     const p = this.player;
     this.lastHitBy = by;
-    p.hp -= amount * (this.has(N.inferno) ? 1.3 : 1);
+    p.hp -= amount * (this.has(N.inferno) ? 1.3 : 1) * (this.has("acidblood") ? 1.15 : 1);
+    if (this.has("acidblood")) this.puddle(p.x, p.y, 50 * this.areaMul, 4, this.toxicDamage * 1.5, "Acid Blood");
     p.inv = CFG.player.iframes;
     this.shake = 3;
     this.sfx("hurt");
@@ -502,55 +505,65 @@ export class Game {
       this.events.toast("Rewind! You get another try.", "gold");
       return;
     }
+    if (this.has("secondwind") && !p.revived) {
+      p.revived = true;
+      p.hp = p.maxHp / 2;
+      p.inv = 2;
+      this.effect("ring", p.x, p.y - 12, 3, 0.7);
+      this.events.toast("Second Wind! You got back up.", "gold");
+      return;
+    }
     p.hp = 0;
     this.over = true;
     this.effect("poof", p.x, p.y - 12, 1.6, 0.6);
     this.events.gameOver();
   }
 
-  // ---------- Support scrolls ----------
-  private updateSupports(dt: number) {
+  // ---------- Support magic ----------
+  private updateSupports() {
     const p = this.player;
-    for (const k of Object.keys(this.sup) as SupportId[]) this.sup[k] -= dt;
-    const conf = this.lv("confuse");
-    if (conf && this.sup.confuse <= 0) {
+    const T = this.T;
+    if (this.has("dust") && T.dust <= 0) {
       const t = this.nearest(p.x, p.y, 140);
       if (t) {
-        this.sup.confuse = SUP.confuse.every[conf - 1];
-        this.dust(t.x, t.y, SUP.confuse.radius[conf - 1] * this.areaMul, SUP.confuse.dur[conf - 1]);
-      }
+        T.dust = this.has("spin") ? 5 : 8;
+        this.dust(t.x, t.y, 55 * this.areaMul, this.has("spin") ? 4 : 3);
+      } else T.dust = 0.5;
     }
-    const ch = this.lv("charm");
-    if (ch && this.sup.charm <= 0) {
-      this.sup.charm = SUP.charm.every[ch - 1];
-      for (let i = 0; i < SUP.charm.count[ch - 1]; i++) {
+    if (this.has("charm") && T.charm <= 0) {
+      T.charm = 12;
+      for (let i = 0; i < (this.has("twohearts") ? 2 : 1); i++) {
         let best: Enemy | null = null;
         for (const e of this.enemies)
           if (!e.dead && e.kind !== "king" && !e.elite && e.charmT <= 0 && (e.x - p.x) ** 2 + (e.y - p.y) ** 2 < 130 * 130 && (!best || e.hp > best.hp)) best = e;
         if (!best) break;
-        this.befriend(best, SUP.charm.dur[ch - 1], SUP.charm.hit[ch - 1], "Heart Charm");
+        this.befriend(best, 8, this.has("crush") ? 0.18 : 0.06, "Heart Charm");
         this.effect("heart", best.x, best.y - best.r * 2, 1, 0.8);
         this.sfx("charm");
       }
     }
-    const ml = this.lv("moonlight");
-    if (ml && this.sup.moonlight <= 0) {
-      this.sup.moonlight = SUP.moonlight.every[ml - 1];
-      if (p.hp < p.maxHp) this.heal(p.maxHp * SUP.moonlight.heal[ml - 1]);
-      else this.sup.moonlight = 1;
+    if (this.has("mend") && T.mend <= 0) {
+      T.mend = 25;
+      if (p.hp < p.maxHp) this.heal(p.maxHp * 0.12);
+      else T.mend = 1;
     }
-    const wd = this.lv("ward");
-    if (wd && this.sup.ward <= 0) {
-      this.sup.ward = SUP.ward.every[wd - 1];
-      p.ward = SUP.ward.dur[wd - 1];
+    if (this.has("bubble") && T.bubble <= 0) {
+      T.bubble = this.has("thick") ? 16 : 20;
+      p.ward = this.has("thick") ? 5 : 3;
       this.effect("ring", p.x, p.y - 12, 1.2, 0.4);
       this.sfx("ward");
     }
+    // Pop! when a bubble ends
+    if (this.prevWard > 0 && p.ward <= 0 && this.has("pop")) {
+      this.nova(p.x, p.y - 8, 60 * this.areaMul, 20 * this.power, "Pop!", "none", "steam", {});
+      this.sfx("ring", 1.6);
+    }
+    this.prevWard = p.ward;
   }
 
   private heal(amount: number) {
     const p = this.player;
-    const v = Math.round(Math.min(p.maxHp - p.hp, amount));
+    const v = Math.round(Math.min(p.maxHp - p.hp, amount * (1 + this.stats.heal)));
     if (v <= 0) return;
     p.hp += v;
     this.nums.push({ x: p.x, y: p.y - 40, value: v, t: 0, style: "heal" });
@@ -652,7 +665,7 @@ export class Game {
       kind, x, y, kx: 0, ky: 0, hp, maxHp: hp, r: t.radius, speed: t.speed * (0.9 + Math.random() * 0.2),
       damage: t.damage * (1 + CFG.spawn.damagePerMin * min), xp: t.xp, flash: 0, phase: Math.random() * 10, dead: false,
       burnT: 0, burnDps: 0, burnShown: 0, burnGreen: false, chillT: 0, freezeT: 0, stunT: 0, poisonT: 9, dizzyT: 0,
-      charmT: 0, allyHit: 0, allySrc: "", bumpT: 0, sunT: 0, moonT: 0, zapT: 0, stormHit: false,
+      charmT: 0, allyHit: 0, allySrc: "", bumpT: 0, sunT: 0, moonT: 0, zapT: 0, stormHit: false, freezeCd: 0, trailT: 0,
       elite: false, ai: 0, aiT: 1 + Math.random() * 2, dirX: 0, dirY: 0,
     };
     this.enemies.push(e);
@@ -728,6 +741,8 @@ export class Game {
       e.sunT -= dt;
       e.moonT -= dt;
       e.zapT -= dt;
+      e.freezeCd -= dt;
+      e.trailT -= dt;
       e.flash = Math.max(0, e.flash - dt);
       if (!frozen) {
         e.aiT -= dt;
@@ -751,6 +766,11 @@ export class Game {
         if (Math.random() < dt * 4) this.parts.push({ x: e.x, y: e.y - e.r * 2, vx: 0, vy: 0, life: 0.6, max: 0.6, color: e.allySrc === "Heart Charm" ? "#ff80c0" : "#c8f0ff", size: 2, rise: 20 });
         if (e.charmT <= 0) {
           if (this.has("haunt") && e.allySrc === "Ghost friends") this.dust(e.x, e.y, 40, 2);
+          if (this.has("lovebomb") && e.allySrc === "Heart Charm") {
+            this.nova(e.x, e.y - 6, 50 * this.areaMul, 25 * this.power, "Love Bomb", "none", "steam", {});
+            for (let i = 0; i < 6; i++) this.effect("heart", e.x + (Math.random() - 0.5) * 30, e.y - 10 - Math.random() * 20, 1, 0.8);
+            this.heal(3);
+          }
           e.xp = e.allySrc === "Heart Charm" ? e.xp : 0;
           this.kill(e);
           continue;
@@ -816,6 +836,7 @@ export class Game {
       if (e.charmT <= 0) {
         if (slowAura && dp < 70) slow *= 0.7;
         if (this.midnight > 0) slow *= 0.5;
+        if (e.poisonT < 0.6 && this.has("bog")) slow *= 0.6;
       }
       e.x += (mx * sp * slow + (this.timeStop ? 0 : e.kx)) * dt;
       e.y += (my * sp * slow + (this.timeStop ? 0 : e.ky)) * dt;
@@ -852,7 +873,7 @@ export class Game {
           o.bumpT = 0.5;
           this.src = friendly ? e.allySrc : "Dizzy Dust";
           this.el = "none";
-          const hit = friendly ? o.maxHp * e.allyHit * (e.allySrc === "Ghost friends" ? 1 + this.stats.ghost : 1) + e.damage : o.maxHp * 0.05 + 2;
+          const hit = friendly ? o.maxHp * e.allyHit * (e.allySrc === "Ghost friends" ? 1 + this.stats.ghost : 1) + e.damage : (o.maxHp * 0.05 + 2) * (this.has("bonkparty") ? 3 : 1);
           this.damage(o, hit, -ox, -oy, { kb: 0.6 });
         }
         const dist = Math.sqrt(dd);
@@ -963,7 +984,7 @@ export class Game {
     }
 
     // Fireball
-    if (T.cast <= 0) {
+    if (this.has("fireball") && T.cast <= 0) {
       const target = this.nearest(ox, oy, CFG.fireball.range);
       if (target) {
         this.casts++;
@@ -999,10 +1020,41 @@ export class Game {
       } else T.ring = 0.2;
     }
 
-    // Hot Paws
-    if (this.has(N.hotPaws) && T.trail <= 0 && p.moving) {
-      T.trail = 0.4;
-      this.ground(p.x, p.y, 12 * this.areaMul, 2.5, 3 * this.power, this.green ? "green" : "fire", "Hot Paws");
+    // Ice Shard
+    if (this.has("shard") && T.shard <= 0) {
+      const target = this.nearest(ox, oy, 210);
+      if (target) {
+        T.shard = 0.7 * this.cd;
+        const volley = (x: number, y: number, mul: number, src: string) => {
+          const t = x === ox ? target : this.nearest(x, y, 210) ?? target;
+          const aim = Math.atan2(t.y - t.r - y, t.x - x);
+          const spread = this.has("fan") ? [-0.28, 0, 0.28] : [0];
+          for (const d of spread)
+            this.shots.push({ x, y, vx: Math.cos(aim + d) * 230, vy: Math.sin(aim + d) * 230, life: 1, damage: this.shardDamage * mul, r: 3, pierce: 3, hit: [], dead: false, kind: "shard", src, el: "frost", green: false, homing: false, bounces: 0 });
+        };
+        volley(ox, oy, 1, "Ice Shard");
+        this.echoes.forEach((e, i) => volley(e.x, e.y - 20, i === 0 ? 0.5 : 0.35, "Reflections"));
+        this.sfx("ice", 1.4);
+      } else T.shard = 0.1;
+    }
+
+    // Paths of fire and poison behind you
+    this.updateTrails(dt);
+    if (this.has("miasma") && T.miasma <= 0) {
+      T.miasma = 0.5;
+      const r = 40 * this.areaMul;
+      this.src = "Miasma";
+      this.el = "toxic";
+      this.forNear(p.x, p.y, (e) => {
+        if (e.dead || e.charmT > 0 || (e.x - p.x) ** 2 + (e.y - p.y) ** 2 > r * r) return;
+        e.poisonT = 0;
+        this.damage(e, this.toxicDamage * 0.8, 0, 0, { kb: 0 });
+      }, Math.ceil(r / HASH));
+      for (let i = 0; i < 6; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const d = Math.random() * r;
+        this.parts.push({ x: p.x + Math.cos(a) * d, y: p.y + Math.sin(a) * d * 0.7, vx: 0, vy: 0, life: 0.8, max: 0.8, color: Math.random() < 0.5 ? "#7ad040" : "#3f8a2a", size: 2, rise: 8 });
+      }
     }
 
     // Meteors
@@ -1033,7 +1085,10 @@ export class Game {
       const r = 52 * this.areaMul;
       if (this.nearest(p.x, p.y, r * 1.5)) {
         T.frost = 3 * this.cd;
-        this.nova(p.x, p.y - 6, r, this.frostDamage, "Frost Nova", "frost", "ice", { chill: CFG.chillTime });
+        const waves = this.has("ripples") ? this.roll(3) : 1;
+        if (this.has("ripples") && waves === this.die(3)) this.maxRoll(3);
+        for (let i = 0; i < waves; i++)
+          this.novas.push({ x: p.x, y: p.y - 6, t: -i * 0.22, r: r * (1 + i * 0.18), damage: this.frostDamage, src: "Frost Nova", el: "frost", theme: "ice", chill: CFG.chillTime, stun: 0, hit: new Set(), dead: false });
         this.sfx("ice");
       } else T.frost = 0.2;
     }
@@ -1050,14 +1105,17 @@ export class Game {
     if (this.has("storm") && T.zap <= 0) {
       const first = this.nearest(p.x, p.y, 200);
       if (first) {
-        T.zap = 1.4 * this.cd;
-        let jumps = 2;
+        T.zap = 1 * this.cd;
+        let jumps = 3;
         if (this.has("forked")) {
           const r = this.roll(6);
           jumps = r + 1;
           if (r === this.die(6)) this.maxRoll(6);
         }
-        this.chain(ox, oy, first, jumps, this.stormDamage, "Lightning");
+        // Thunderbolt: every 5th zap is a big one
+        const big = this.has("thunderbolt") && ++this.zaps % 5 === 0;
+        this.chain(ox, oy, first, jumps, this.stormDamage * (big ? 4 : 1), big ? "Thunderbolt" : "Lightning", big ? 1 : 0);
+        if (big) this.shake = Math.max(this.shake, 2);
         this.sfx("zap");
       } else T.zap = 0.1;
     }
@@ -1067,17 +1125,23 @@ export class Game {
       if (e) this.strike(e, this.stormDamage * 0.75, "Storm Call");
     }
 
-    // Poison puddles
+    // Poison globs, lobbed onto enemies
     if (this.has("toxic") && T.toxic <= 0) {
-      if (this.nearest(p.x, p.y, 170)) {
-        T.toxic = 2.6 * this.cd;
+      const first = this.nearest(p.x, p.y, 180);
+      if (first) {
+        T.toxic = 1.2 * this.cd * (this.has("plague") ? 1.4 : 1);
         const n = this.has("spores") ? this.roll(3) : 1;
         if (this.has("spores") && n === this.die(3)) this.maxRoll(3);
-        for (let i = 0; i < n; i++) {
-          const a = Math.random() * Math.PI * 2;
-          const d = i === 0 ? 0 : 30 + Math.random() * 40;
-          this.puddle(p.x + Math.cos(a) * d, p.y + Math.sin(a) * d * 0.8, 22 * this.areaMul, 4, this.toxicDamage, "Poison");
-        }
+        const lob = (x: number, y: number, t: Enemy, src: string) => {
+          const d = Math.hypot(t.x - x, t.y - y) || 1;
+          const sp = 160;
+          this.shots.push({ x, y, vx: ((t.x - x) / d) * sp, vy: ((t.y - y) / d) * sp, life: d / sp, damage: this.toxicDamage, r: 3, pierce: 99, hit: [], dead: false, kind: "glob", src, el: "toxic", green: false, homing: false, bounces: 0 });
+        };
+        for (let i = 0; i < n; i++) lob(ox, oy, i === 0 ? first : this.randomEnemy(p.x, p.y, 180) ?? first, "Poison");
+        this.echoes.forEach((e) => {
+          const t = this.nearest(e.x, e.y, 180);
+          if (t) lob(e.x, e.y - 20, t, "Reflections");
+        });
         this.sfx("plop");
       } else T.toxic = 0.2;
     }
@@ -1106,6 +1170,41 @@ export class Game {
         this.blackHole(t.x, t.y, 1);
       } else T.blackhole = 0.5;
     }
+  }
+
+  /** Hot Paws and Stink Trail: a path that follows you and hurts anything that crosses it. */
+  private updateTrails(dt: number) {
+    const p = this.player;
+    const want: [boolean, Theme, string, number][] = [
+      [this.has(N.hotPaws), this.green ? "green" : "fire", "Hot Paws", 3 * this.power * (1 + this.stats.burn * 0.5)],
+      [this.has("stinktrail"), "toxic", "Stink Trail", this.toxicDamage * 0.7],
+    ];
+    for (const [on, theme, src, dmg] of want) {
+      let tr = this.trails.find((t) => t.src === src);
+      if (!on) {
+        if (tr) this.trails.splice(this.trails.indexOf(tr), 1);
+        continue;
+      }
+      if (!tr) this.trails.push((tr = { theme, src, pts: [] }));
+      tr.theme = theme;
+      const last = tr.pts[tr.pts.length - 1];
+      if (p.under <= 0 && (!last || (last.x - p.x) ** 2 + (last.y - p.y) ** 2 > 36)) tr.pts.push({ x: p.x, y: p.y, t: this.time });
+      while (tr.pts.length && this.time - tr.pts[0].t > 2.5) tr.pts.shift();
+      if (tr.pts.length > 80) tr.pts.shift();
+      this.src = src;
+      this.el = theme === "toxic" ? "toxic" : "fire";
+      const w = 7 * Math.sqrt(this.areaMul);
+      for (let i = 0; i < tr.pts.length; i += 2) {
+        const pt = tr.pts[i];
+        this.forNear(pt.x, pt.y, (e) => {
+          if (e.dead || e.charmT > 0 || e.trailT > 0 || (e.x - pt.x) ** 2 + (e.y - pt.y) ** 2 > (w + e.r) ** 2) return;
+          e.trailT = 0.5;
+          if (theme === "toxic") e.poisonT = 0;
+          this.damage(e, dmg, 0, 0, { kb: 0, burn: theme === "toxic" ? 0 : dmg * 0.3 });
+        });
+      }
+    }
+    void dt;
   }
 
   private fireball(x: number, y: number, a: number, damage: number, src: string) {
@@ -1138,7 +1237,7 @@ export class Game {
   }
 
   private puddle(x: number, y: number, r: number, dur: number, damage: number, src: string) {
-    this.ground(x, y, r, dur, damage, "toxic", src, this.has("bloom"));
+    this.ground(x, y, r, dur * (this.has("plague") ? 2 : 1), damage, "toxic", src, this.has("bloom"));
   }
 
   private blackHole(x: number, y: number, scale: number) {
@@ -1148,11 +1247,12 @@ export class Game {
   }
 
   /** A lightning chain starting from (x, y). */
-  private chain(x: number, y: number, first: Enemy, jumps: number, dmg: number, src: string) {
+  private chain(x: number, y: number, first: Enemy, jumps: number, dmg: number, src: string, stun = 0) {
     const hit = new Set<Enemy>();
     const pts: [number, number][] = [[x, y]];
     let cur: Enemy | null = first;
     let bonus = 0;
+    const reach = this.has("conductor") ? 400 : 75 * (this.has("arc") ? 1.6 : 1);
     for (let i = 0; i <= jumps && cur; i++) {
       hit.add(cur);
       if (this.has("supercon") && cur.chillT > 0 && bonus < 5) {
@@ -1162,9 +1262,19 @@ export class Game {
       pts.push([cur.x, cur.y - cur.r]);
       this.src = src;
       this.el = "storm";
-      this.damage(cur, dmg, cur.x - pts[pts.length - 2][0], cur.y - pts[pts.length - 2][1], { kb: 0.4, storm: true });
+      this.damage(cur, dmg, cur.x - pts[pts.length - 2][0], cur.y - pts[pts.length - 2][1], { kb: 1, storm: true, stun });
       this.effect("spark", cur.x, cur.y - cur.r, 1, 0.16);
-      cur = this.nearest(cur.x, cur.y, 75, hit);
+      if (this.has("static")) {
+        const o = this.nearest(cur.x, cur.y, 50, hit);
+        if (o) {
+          this.bolts.push({ pts: [[cur.x, cur.y - cur.r], [o.x, o.y - o.r]], t: 0.05, dead: false });
+          this.src = "Static";
+          this.damage(o, dmg * 0.4, 0, 0, { kb: 0.2 });
+          this.src = src;
+        }
+      }
+      if (this.has("arc")) dmg *= 1.15;
+      cur = this.nearest(cur.x, cur.y, reach, hit);
     }
     this.bolts.push({ pts, t: 0, dead: false });
   }
@@ -1218,16 +1328,40 @@ export class Game {
 
   private updateMoons(dt: number) {
     const p = this.player;
-    this.moonAngle -= 2.6 * dt;
-    const radius = 40 * Math.sqrt(this.areaMul);
-    const list: { a: number; big: boolean }[] = [{ a: 0, big: false }, { a: Math.PI, big: false }];
-    if (this.has("full")) {
-      list[1].a = (Math.PI * 2) / 3;
-      list.push({ a: (Math.PI * 4) / 3, big: true });
-    }
-    const drip = this.has("moonshroom") && this.T.moondrip <= 0;
-    if (drip) this.T.moondrip = 2;
+    const T = this.T;
+    this.moonAngle -= 3.4 * dt * (this.has("tides") ? 1.4 : 1) * (this.has("ion") ? 1.3 : 1);
+    // The ring of moons slowly breathes in and out, sweeping a wide area
+    const radius = 34 * Math.sqrt(this.areaMul) * (1 + 0.5 * Math.sin(this.time * 1.4));
+    // Constellation rerolls a handful of extra moons every 8 seconds
+    if (this.has("constellation")) {
+      if (T.constel <= 0) {
+        T.constel = 8;
+        this.extraMoons = this.roll(4);
+        if (this.extraMoons === this.die(4)) this.maxRoll(4);
+      }
+    } else this.extraMoons = 0;
+    const count = 3 + this.extraMoons + (this.has("full") ? 1 : 0);
+    const list: { a: number; big: boolean }[] = [];
+    for (let i = 0; i < count; i++) list.push({ a: (i * Math.PI * 2) / count, big: this.has("full") && i === count - 1 });
+    const drip = this.has("moonshroom") && T.moondrip <= 0;
+    if (drip) T.moondrip = 2;
+    // One moon beams at a nearby enemy every 2 seconds; Moonbeam makes every moon do it, faster
+    const beam = T.beam <= 0;
+    if (beam) T.beam = (this.has("beam") ? 1.5 : 2) * this.cd;
     const frost = this.has("moonfrost");
+    const kick = this.has("kick");
+    // Gravity Moon: tug nearby enemies toward you
+    if (this.has("gravmoon"))
+      this.forNear(p.x, p.y, (e) => {
+        if (e.dead || e.charmT > 0 || e.kind === "king") return;
+        const dx = p.x - e.x;
+        const dy = p.y - e.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 90 && d > radius * 0.8) {
+          e.x += (dx / d) * 40 * dt;
+          e.y += (dy / d) * 40 * dt;
+        }
+      }, 3);
     this.moons.length = 0;
     for (const m of list) {
       const a = this.moonAngle + m.a;
@@ -1235,18 +1369,41 @@ export class Game {
       const y = p.y - 10 + Math.sin(a) * radius * 0.85;
       this.moons.push({ x, y, big: m.big });
       if (drip) this.puddle(x, y + 10, 14, 3, this.toxicDamage * 0.7, "Moonshrooms");
+      if (beam && (this.has("beam") || m === list[0])) {
+        const t = this.nearest(x, y, 120);
+        if (t) {
+          this.bolts.push({ pts: [[x, y], [t.x, t.y - t.r]], t: 0.02, dead: false });
+          this.src = "Moonbeam";
+          this.el = "moon";
+          this.damage(t, this.moonDamage, t.x - x, t.y - y, { kb: 0.4 });
+        }
+      }
       const reach = m.big ? 10 : 6;
       this.forNear(x, y, (e) => {
         if (e.dead || e.moonT > 0 || e.charmT > 0) return;
         const rs = e.r + reach;
         if ((e.x - x) ** 2 + (e.y - e.r - y) ** 2 > rs * rs) return;
-        e.moonT = 0.5;
+        e.moonT = 0.4;
         this.src = "Moon Orbs";
         this.el = "moon";
         const dmg = this.moonDamage * (m.big ? 3 : 1) * (frost && e.chillT > 0 ? 1.5 : 1);
         if (frost) e.chillT = Math.max(e.chillT, 1.5);
-        this.damage(e, dmg, e.x - p.x, e.y - p.y, { kb: m.big ? 3 : 1.6 });
+        this.damage(e, dmg, e.x - p.x, e.y - p.y, {
+          kb: (m.big ? 3 : 1.6) * (kick ? 2 : 1), stun: kick || this.has("ion") ? 0.3 : 0, burn: this.has("harvest") ? dmg * 0.25 : 0,
+        });
         this.effect("spark", x, y, 1, 0.16);
+        if (this.has("chargedmoons")) {
+          const o = this.nearest(e.x, e.y, 60, new Set([e]));
+          if (o) {
+            this.bolts.push({ pts: [[x, y], [o.x, o.y - o.r]], t: 0.05, dead: false });
+            this.src = "Charged Moons";
+            this.damage(o, dmg * 0.6, 0, 0, { kb: 0.2, storm: true });
+          }
+        }
+        if (this.has("embermoon") && Math.random() < 0.25) {
+          const t = this.nearest(x, y, 200, new Set([e]));
+          if (t) this.fireball(x, y, Math.atan2(t.y - t.r - y, t.x - x), 14 * this.power, "Ember Moons");
+        }
       });
     }
   }
@@ -1409,6 +1566,13 @@ export class Game {
         }
       }
     } else this.weather = "";
+    // Lightning Rod: now and then the sky hits you too
+    if (this.has("rod") && T.rod <= 0) {
+      T.rod = 12;
+      this.bolts.push({ pts: [[p.x + 6, p.y - 130], [p.x, p.y - 14]], t: 0, dead: false });
+      this.sfx("zap", 0.7);
+      if (!this.safe) this.hurt(6, "lightning rod");
+    }
     // Gambler
     if (this.has("gambler") && T.gambler <= 0) {
       T.gambler = 15;
@@ -1495,6 +1659,17 @@ export class Game {
       s.life -= dt;
       if (s.life <= 0) {
         s.dead = true;
+        if (s.kind === "glob") {
+          // Splat: a hit on everything it lands on, then a puddle
+          const r = this.puddleSize;
+          this.src = s.src;
+          this.el = "toxic";
+          this.forNear(s.x, s.y, (e) => {
+            if (!e.dead && e.charmT <= 0 && ((e.x - s.x) / r) ** 2 + ((e.y - s.y) / (r * 0.7)) ** 2 <= 1) this.damage(e, s.damage * 1.5, e.x - s.x, e.y - s.y, { kb: 0.8 });
+          }, Math.ceil(r / HASH));
+          this.puddle(s.x, s.y, r, 4, s.damage, s.src);
+          this.burst(s.x, s.y, "#9ae04a", 8, 60);
+        }
         continue;
       }
       // Heavy Thoughts: orbs drag enemies along
@@ -1513,6 +1688,7 @@ export class Game {
         const c = s.kind === "snow" ? "#ffffff" : s.kind === "carrot" ? "#ffb060" : s.kind === "spore" ? "#c8f080" : s.green ? (Math.random() < 0.5 ? "#7ad040" : "#d8ff90") : Math.random() < 0.5 ? "#ff7a1a" : "#ffe63d";
         this.parts.push({ x: s.x, y: s.y, vx: -s.vx * 0.05 + (Math.random() - 0.5) * 10, vy: -s.vy * 0.05 + (Math.random() - 0.5) * 10, life: 0.25, max: 0.25, color: c, size: s.kind === "orb" ? 2 : 1 });
       }
+      if (s.kind === "glob") continue;
       this.forNear(s.x, s.y, (e) => {
         if (s.dead || e.dead || e.charmT > 0 || s.hit.includes(e)) return;
         const rs = e.r + s.r;
@@ -1521,9 +1697,22 @@ export class Game {
         this.src = s.src;
         this.el = s.el;
         const fire = s.kind === "fire" || s.kind === "orb";
-        this.damage(e, s.damage, s.vx, s.vy, { burn: fire && this.has(N.ignite) ? Math.max(s.damage, 14 * this.power) * 0.2 : 0, chill: s.kind === "snow" ? 1.5 : 0 });
+        const poisoned = e.poisonT < 0.6;
+        this.damage(e, s.damage, s.vx, s.vy, { burn: fire && this.has(N.ignite) ? Math.max(s.damage, 14 * this.power) * 0.2 : 0, chill: s.kind === "snow" || s.kind === "shard" ? 1.5 : 0 });
         this.effect("spark", s.x, s.y, 1, 0.16);
-        const boom = (fire && this.has(N.blast)) || s.kind === "carrot";
+        // Ball Lightning: fireballs zap a neighbor
+        if (fire && this.has("ball")) {
+          const o = this.nearest(s.x, s.y, 60, new Set([e]));
+          if (o) {
+            this.bolts.push({ pts: [[s.x, s.y], [o.x, o.y - o.r]], t: 0.05, dead: false });
+            this.src = "Ball Lightning";
+            this.el = "storm";
+            this.damage(o, Math.max(s.damage, 14 * this.power) * 0.4, 0, 0, { kb: 0.2, storm: true });
+            this.src = s.src;
+            this.el = s.el;
+          }
+        }
+        const boom = (fire && (this.has(N.blast) || (poisoned && this.has("gasleak")))) || s.kind === "carrot";
         if (boom) {
           const r = (s.kind === "carrot" ? 24 : 26) * this.areaMul;
           this.effect("blast", s.x, s.y, this.areaMul, 0.3, s.kind === "carrot" ? "#ffb060" : undefined);
@@ -1603,10 +1792,18 @@ export class Game {
       f.tick = 0.5;
       this.src = f.src;
       this.el = toxic ? "toxic" : f.theme === "ice" ? "frost" : "fire";
+      const blackice = toxic && this.has("blackice");
+      const frostbite = toxic && this.has("frostbite");
+      const fumes = toxic && this.has("fumes");
       this.forNear(f.x, f.y, (e) => {
         if (!inside(e)) return;
         if (f.theme === "ice") e.chillT = Math.max(e.chillT, 1.5);
-        const burn = toxic ? (rot ? f.damage * 0.4 : 0) : f.theme === "ice" ? 0 : f.damage * 0.3;
+        if (frostbite && e.chillT > 0 && e.freezeCd <= 0) {
+          e.freezeT = Math.max(e.freezeT, 1);
+          e.freezeCd = 3;
+        }
+        if (blackice) e.chillT = Math.max(e.chillT, 0.8);
+        const burn = toxic ? (rot || fumes ? f.damage * 0.4 : 0) : f.theme === "ice" ? 0 : f.damage * 0.3;
         if (toxic && rot) e.burnGreen = true;
         this.damage(e, f.damage, 0, 0, { kb: 0, burn });
       }, Math.ceil(f.r / HASH));
@@ -1692,7 +1889,15 @@ export class Game {
     if (poisoned && this.has("corrode")) amount *= 1.3;
     if (this.el === "fire" && chilled && this.has("thermal")) amount *= 2;
     if (o.storm && poisoned && this.has("electro")) amount *= 1.5;
-    if (e.dizzyT > 0 && this.lv("confuse") >= 3) amount *= 1.25;
+    if (e.dizzyT > 0 && this.has("clumsy")) amount *= 1.25;
+    if (e.freezeT > 0 && this.has("glacialheart")) amount *= 3;
+    if (this.el === "toxic" && chilled && this.has("blackice")) amount *= 1.5;
+    // Deep Freeze: frost on a chilled enemy freezes it
+    if (this.el === "frost" && e.chillT > 0 && this.has("deepfreeze") && e.freezeCd <= 0) {
+      o.freeze = Math.max(o.freeze ?? 0, 0.8);
+      e.freezeCd = 3;
+    }
+    if (o.chill && this.has("permafrost")) o.chill *= 10;
     if (o.storm) {
       e.stormHit = true;
       if (this.has("plasma")) o.burn = Math.max(o.burn ?? 0, amount * 0.3);
@@ -1761,6 +1966,7 @@ export class Game {
       if (this.has("witchfire") && Math.random() < 0.5) this.ground(e.x, e.y, 16 * this.areaMul, 2.5, 1.5 * this.power * (1 + this.stats.burn), "green", "Witchfire");
     }
     if (e.poisonT < 0.6 && this.has("compost") && Math.random() < 0.03) this.drop("carrot", e.x, e.y);
+    if (e.poisonT < 0.6 && this.has("contagion") && Math.random() < 0.25) this.puddle(e.x, e.y, this.puddleSize * 0.6, 2, this.toxicDamage * 0.6, "Contagion");
     this.sfx("pop", e.kind === "king" || e.elite || e.kind === "golem" ? 0.5 : 1);
     if (e.kind === "king" || e.elite) {
       this.burst(e.x, e.y - 12, e.elite ? "#ffd640" : color, 40, 130);
@@ -1820,12 +2026,12 @@ export class Game {
   }
 
   // ---------- Pickups ----------
-  private pull(o: { x: number; y: number; magnet: boolean; sp: number }, dt: number) {
+  private pull(o: { x: number; y: number; magnet: boolean; sp: number }, dt: number, reach = 1) {
     const p = this.player;
     const dx = p.x - o.x;
     const dy = p.y - 10 - o.y;
     const d = Math.hypot(dx, dy) || 1;
-    if (!o.magnet && d < CFG.player.pickupRadius * this.pickupMul) o.magnet = true;
+    if (!o.magnet && d < CFG.player.pickupRadius * this.pickupMul * reach) o.magnet = true;
     if (!o.magnet) return false;
     o.sp = Math.max(o.sp + 500 * dt, 60);
     const step = Math.min(d, o.sp * dt);
@@ -1854,7 +2060,8 @@ export class Game {
     const p = this.player;
     for (const l of this.loot) {
       l.t += dt;
-      if (!this.pull(l, dt)) continue;
+      // Scrolls and chests come to you from much farther away
+      if (!this.pull(l, dt, l.kind === "scroll" || l.kind === "chest" ? 3.5 : 1)) continue;
       l.dead = true;
       this.effect("ring", p.x, p.y - 12, 1.4, 0.5);
       if (l.kind === "scroll") {

@@ -2,11 +2,11 @@ import "./style.css";
 import { spriteURL } from "./art";
 import type { RegionDef } from "./content";
 import { CFG } from "./config";
-import { SCROLLS, SUPPORTS } from "./content";
+import { SCROLLS, ScrollId } from "./content";
 import { Game, GameEvents } from "./game";
 import { Joystick, Renderer } from "./render";
 import { Sound } from "./sfx";
-import { ScrollOffer, Spellbook } from "./ui/spellbook";
+import { ScrollOffer, Spellbook, StartPicker } from "./ui/spellbook";
 
 const app = document.getElementById("app")!;
 app.innerHTML = `
@@ -18,7 +18,7 @@ app.innerHTML = `
       <div class="mid"><span class="timer">0:00</span><span class="danger"></span></div>
       <span class="lvl">Lv <b>1</b></span>
     </div>
-    <div class="kit"><div class="scroll-row"></div><div class="sup-row"></div></div>
+    <div class="kit"><div class="scroll-row"></div></div>
   </div>
   <button class="book-btn" type="button" aria-label="Open spellbook"><span class="book-ico"></span><span class="badge" hidden></span></button>
   <div class="toasts" aria-live="polite"></div>
@@ -78,10 +78,17 @@ const offer = new ScrollOffer(renderer.art, () => game.book, (msg: string, opene
   renderKit();
   if (opened.length || game.book.points > 0) openBook(opened.length ? `${opened[0].name} unsealed!` : "Spend your points");
 });
-app.append(book.root, offer.root);
+const picker = new StartPicker(renderer.art, (id: ScrollId) => {
+  game = new Game(events, id);
+  resize();
+  renderKit();
+  sound.play("unseal");
+});
+app.append(book.root, offer.root, picker.root);
+picker.open();
 
 function openBook(headline = "") {
-  if (game.over || offer.isOpen || game.victoryPending) return;
+  if (game.over || offer.isOpen || picker.isOpen || game.victoryPending) return;
   keys.clear();
   joy.active = false;
   book.open(headline);
@@ -121,12 +128,11 @@ function showEnd(won: boolean) {
 }
 
 function restart() {
-  game = new Game(events);
   overEl.hidden = true;
   pendingBook = "";
   book.close();
-  resize();
-  renderKit();
+  game = new Game(events);
+  picker.open();
 }
 
 // ---------- HUD ----------
@@ -138,7 +144,6 @@ const dangerEl = $<HTMLElement>(".danger");
 const lvlEl = $<HTMLElement>(".lvl b");
 const badge = $<HTMLElement>(".badge");
 const scrollRow = $<HTMLElement>(".scroll-row");
-const supRow = $<HTMLElement>(".sup-row");
 const icons = new Map([...renderer.art.scrolls].map(([id, s]) => [id, spriteURL(s, 2)]));
 $<HTMLElement>(".book-ico").style.backgroundImage = `url(${spriteURL(renderer.art.lootScroll, 3)})`;
 
@@ -146,13 +151,6 @@ function renderKit() {
   const b = game.book;
   scrollRow.innerHTML = [...b.scrolls]
     .map((id) => `<img src="${icons.get(id)}" alt="${SCROLLS[id].name}" title="${SCROLLS[id].name}" class="px" style="--c:${SCROLLS[id].color}">`)
-    .join("");
-  supRow.innerHTML = b.supports
-    .map((s) =>
-      s
-        ? `<span class="sup" style="--c:${SUPPORTS[s.id].color}"><img src="${icons.get(s.id)}" alt="${SUPPORTS[s.id].name}" class="px"><b>${"●".repeat(s.level)}</b></span>`
-        : `<span class="sup empty"></span>`,
-    )
     .join("");
 }
 renderKit();
@@ -277,7 +275,7 @@ document.addEventListener("visibilitychange", () => {
   hidden = document.hidden;
   if (hidden && !game.over && !book.isOpen && !offer.isOpen) openBook("Paused");
 });
-const paused = () => book.isOpen || offer.isOpen || game.over || game.victoryPending || hidden;
+const paused = () => book.isOpen || offer.isOpen || picker.isOpen || game.over || game.victoryPending || hidden;
 
 let last = performance.now();
 let acc = 0;

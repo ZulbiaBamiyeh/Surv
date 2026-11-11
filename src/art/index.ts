@@ -5,7 +5,7 @@ import {
   Emblem, carrotSprite, chestSprite, fireballFrame, gemSprite, glowSprite, glyphScroll, magnetSprite, moonSprite, poofFrames,
   scrollSprite, shadowSprite, sparkFrames, sunSprite,
 } from "./items";
-import { ALL_SCROLLS, ALL_SUPPORTS, SCROLLS, SUPPORTS, ScrollId, SupportId } from "../content";
+import { ALL_SCROLLS, SCROLLS, ScrollId } from "../content";
 import { RAMPS, Ramp } from "./palette";
 import type { Sprite } from "./painter";
 import { CHUNK, PlacedProp, PropKit, chunkProps, groundChunk, makePropKit } from "./world";
@@ -15,17 +15,17 @@ export type { Sprite } from "./painter";
 export const FIRE_DIRS = 16;
 
 /** Scrolls with a hand-painted emblem; the rest use a glyph. */
-const EMBLEMS: Partial<Record<ScrollId | SupportId, Emblem>> = {
+const EMBLEMS: Partial<Record<ScrollId, Emblem>> = {
   fire: "fire", frost: "frost", storm: "zap", toxic: "poison", moon: "moon", charm: "mend", ward: "ward",
 };
-export const SCROLL_GLYPH: Record<ScrollId | SupportId, string> = {
+export const SCROLL_GLYPH: Record<ScrollId, string> = {
   fire: "flame", frost: "flake", storm: "bolt", toxic: "drop", moon: "moon", meteor: "meteor", suns: "sun", verdant: "flame",
   totem: "totem", spirit: "ghost", burrow: "carrot", dice: "die", clock: "hourglass", mirror: "mirror", gravity: "vortex",
-  confuse: "swirl", charm: "heart", moonlight: "moon", ward: "shield", swift: "paw", clover: "clover",
+  dizzy: "swirl", charm: "heart", mend: "leaf", ward: "shield", swift: "paw",
 };
 const seal = (color: string): Ramp => ["#140d1c", color, color, "#ffffff"];
 
-function scrollFor(id: ScrollId | SupportId, color: string): Sprite {
+function scrollFor(id: ScrollId, color: string): Sprite {
   const e = EMBLEMS[id];
   return e ? scrollSprite(e) : glyphScroll(glyph(SCROLL_GLYPH[id], color), seal(color));
 }
@@ -66,10 +66,7 @@ export function buildArt() {
     orbGlow: glowSprite(8, "#8ae8ff"),
     poof: poofFrames(7, 18),
     spark: sparkFrames(),
-    scrolls: new Map<ScrollId | SupportId, Sprite>([
-      ...ALL_SCROLLS.map((id) => [id, scrollFor(id, SCROLLS[id].color)] as const),
-      ...ALL_SUPPORTS.map((id) => [id, scrollFor(id, SUPPORTS[id].color)] as const),
-    ]),
+    scrolls: new Map<ScrollId, Sprite>(ALL_SCROLLS.map((id) => [id, scrollFor(id, SCROLLS[id].color)] as const)),
     lootScroll: scrollSprite("mend"),
     moon: moonSprite(false),
     bigMoon: moonSprite(true),

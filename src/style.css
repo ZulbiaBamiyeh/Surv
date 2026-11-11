@@ -65,7 +65,7 @@ button { font-family: var(--font); }
 .lvl { justify-self: end; font-size: 14px; color: var(--muted); background: rgba(27, 27, 42, 0.75); border: 2px solid var(--ink); border-radius: 6px; padding: 1px 8px; }
 .lvl b { color: var(--fg); font-size: 17px; }
 .kit { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.scroll-row { display: flex; flex-wrap: wrap; gap: 2px; max-width: 64%; }
+.scroll-row { display: flex; flex-wrap: wrap; gap: 2px; max-width: 100%; }
 .scroll-row img { width: 18px; height: 27px; object-fit: contain; filter: drop-shadow(0 2px 0 var(--ink)); }
 .sup-row { display: flex; gap: 5px; }
 .sup { position: relative; width: 32px; height: 38px; border-radius: 8px; background: rgba(27, 27, 42, 0.75); border: 2px solid var(--c, #4a4770); display: grid; place-items: center; }

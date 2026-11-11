@@ -20,7 +20,7 @@ export const CFG = {
     iframes: 0.7,
     /** Health regained per second. */
     regen: 0.4,
-    pickupRadius: 36,
+    pickupRadius: 42,
   },
 
   /** Small damage bonus for every level gained. Most power comes from skill trees. */

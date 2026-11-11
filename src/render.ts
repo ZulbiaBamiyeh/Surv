@@ -96,6 +96,7 @@ export class Renderer {
 
     // ---------- Things on the ground ----------
     for (const f of g.flames) this.drawGround(ctx, f, R, camX, camY, realTime);
+    for (const tr of g.trails) this.drawTrail(ctx, tr, g.time, R, camX, camY, realTime);
     for (const h of g.holes) this.drawHole(ctx, h.x, h.y, h.r, h.t, h.dur, R, camX, camY, realTime);
     // Meteor target shadows grow as the rock falls
     for (const m of g.meteors) {
@@ -177,7 +178,25 @@ export class Renderer {
     }
     for (const s of g.shots) {
       const a = Math.atan2(s.vy, s.vx);
-      if (s.kind === "snow") {
+      if (s.kind === "shard") {
+        // A short spike of ice pointing where it flies
+        const len = 7;
+        ctx.strokeStyle = "#2490d0";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(R(s.x - Math.cos(a) * len - camX), R(s.y - Math.sin(a) * len - camY));
+        ctx.lineTo(R(s.x - camX), R(s.y - camY));
+        ctx.stroke();
+        ctx.strokeStyle = "#e8f8ff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else if (s.kind === "glob") {
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = "#1a1430";
+        ctx.fillRect(R(s.x - 2 - camX), R(s.y + 6 - camY), 4, 1);
+        ctx.globalAlpha = 1;
+        this.ball(ctx, s.x, s.y - 4 - Math.sin(Math.min(1, s.life * 2) * Math.PI) * 6, 3, "#c8f080", "#3f8a2a", R, camX, camY);
+      } else if (s.kind === "snow") {
         this.ball(ctx, s.x, s.y, 2.5, "#ffffff", "#9cb0d0", R, camX, camY);
       } else if (s.kind === "spore") {
         this.ball(ctx, s.x, s.y, 2.5, "#c8f080", "#3f8a2a", R, camX, camY);
@@ -520,6 +539,51 @@ export class Renderer {
       ctx.fillStyle = ph < 0.8 ? ramp[5] : ramp[4];
       const sz = ph < 0.6 ? 2 : 1;
       ctx.fillRect(R(bx - camX), R(by - camY), sz, sz);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** A path of fire or poison: thick near you, thinning and fading behind. */
+  private drawTrail(ctx: CanvasRenderingContext2D, tr: { theme: Theme; pts: { x: number; y: number; t: number }[] }, now: number, R: R, camX: number, camY: number, realTime: number) {
+    const pts = tr.pts;
+    if (pts.length < 2) return;
+    const fiery = tr.theme === "fire" || tr.theme === "green";
+    const cols = tr.theme === "toxic" ? ["#173d1c", "#3f8a2a", "#9ae04a"] : tr.theme === "green" ? ["#123a14", "#3f9a36", "#b8f070"] : ["#6e1a0a", "#e0501a", "#ffb030"];
+    ctx.lineCap = "round";
+    for (let layer = 0; layer < 3; layer++) {
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1];
+        const b = pts[i];
+        const age = (now - b.t) / 2.5;
+        const life = Math.max(0, 1 - age);
+        const flick = fiery ? 0.8 + Math.sin(realTime * 18 + i * 1.7) * 0.2 : 1;
+        ctx.globalAlpha = Math.min(1, life * 1.6) * (layer === 0 ? 0.7 : layer === 1 ? 0.85 : 0.9);
+        ctx.strokeStyle = cols[layer];
+        ctx.lineWidth = Math.max(1, [8, 5, 1.5][layer] * (0.4 + life * 0.6) * flick);
+        ctx.beginPath();
+        ctx.moveTo(R(a.x - camX), R(a.y - camY));
+        ctx.lineTo(R(b.x - camX), R(b.y - camY));
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    // Licks of flame or bubbles rising off the path
+    const lick = fiery ? (tr.theme === "green" ? ["#e0ffb0", "#8ad850", "#3f9a36"] : ["#fff0a0", "#ffa424", "#e0501a"]) : cols;
+    for (let i = 0; i < pts.length; i++) {
+      for (let k = 0; k < (fiery ? 2 : 1); k++) {
+        if (!fiery && i % 3) continue;
+        const pt = pts[i];
+        const ph = (realTime * (fiery ? 2.8 : 2.2) + i * 0.37 + k * 0.5) % 1;
+        const life = Math.max(0, 1 - (now - pt.t) / 2.5);
+        ctx.globalAlpha = (1 - ph) * life;
+        ctx.fillStyle = lick[ph < 0.3 ? 0 : ph < 0.65 ? 1 : 2];
+        const sz = ph < 0.4 ? 2 : 1;
+        const fx = R(pt.x + Math.sin(i * 3.1 + k * 2) * 3.5 - camX);
+        const fy = R(pt.y - ph * (fiery ? 9 + life * 5 : 4) - camY);
+        // A little tongue of flame: wider at the bottom
+        ctx.fillRect(fx, fy, sz, sz + (fiery && ph < 0.5 ? 2 : 0));
+      }
     }
     ctx.globalAlpha = 1;
   }

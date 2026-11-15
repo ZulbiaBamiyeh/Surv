@@ -1,13 +1,13 @@
-# Bunny Wizard (working title)
+# Bunny Wizard
 
-A cute pixel-art survivors game for phones and desktop. You're a bunny wizard whose spells cast themselves; you steer, pick up gems, and grow one huge spell tree. You start on one element's corner of it, and the scrolls you find decide which other parts open.
+A cozy pixel-art survivors game for phones and browsers. You're a bunny wizard out on a moonlit meadow. Your spells cast themselves; you steer, gather stardust, light stars in the night sky, and try to make it to dawn.
 
 ## Run it
 
 ```sh
 npm install
 npm run dev      # local dev server with hot reload
-npm run build    # typecheck and build to dist/
+npm run build    # typecheck and build to dist/ (index.html, index.css, game.js)
 npm run sim      # headless balance playtest (see below)
 ```
 
@@ -16,89 +16,65 @@ npm run sim      # headless balance playtest (see below)
 | | Phone | Desktop |
 |---|---|---|
 | Move | Drag anywhere (a thumb stick appears under your finger) | WASD or arrow keys |
-| Spellbook (pauses) | Book button, bottom right | Tab or B |
-| Move around the tree | Drag; pinch to zoom; ◎ goes back to the middle | Drag; mouse wheel to zoom |
-| Sound on/off | ♪ in the spellbook | M |
+| Open the sky | ✦ button, bottom right | Tab or E |
+| Pause | Ⅱ button, top right | Esc or P |
 
-The game pauses on its own when you switch apps or tabs.
+The game pauses on its own when you switch apps or tabs. Sound, music and screen shake can be turned off on the title and pause screens.
 
-## How a run works
+## How a night works
 
-- Pick your magic: **one of three elements**, drawn at random from Fire, Frost, Storm, Toxic and Moon. You start on that element's core of the tree.
-- Survive **15 minutes** to win, then choose to **keep going** in overtime, where the danger keeps climbing until something gets you.
-- Every level-up gives **1 skill point**. The spellbook opens so you can spend it, or save it for later. **Undo** takes back anything you took since opening the book.
-- **King Slimes** arrive at 0:40 and about every 85 seconds after, and always drop a scroll. Picking one up offers 3 to choose from. Scrolls and chests fly to you from a good distance.
-- **Golden elites** start showing up at 2:00. They're much tougher and drop a **treasure chest** worth a skill point.
-- A **magnet** drops about every 80 seconds and pulls every gem on the map to you. **Carrots** heal, and turn up more often when you're hurt.
+- A night lasts **10 minutes**. Survive it and dawn breaks. Winning a night unlocks the next, harder one (there are five).
+- You start with **Moonbolt** and choose **one of three constellations**.
+- Enemies drop **stardust**. Fill the bar to earn a star point, then light a star next to one that's already lit.
+- **You can only light 16 stars a night**, out of 38 in the whole sky. Once you've earned all 16, spare stardust heals you instead.
+- **Falling stars** land four times a night (an arrow points the way). Walk to one to choose a new constellation: it appears in your sky, its first star comes free, you heal a little, and a burst of starlight clears the enemies around you. A night uses five of the eight constellations at most.
+- **King Slime** arrives at 4:15 and the **Slime Emperor** at 8:15. Each drops a feast that heals you fully.
+- Golden enemies drop a carrot. A magnet now and then pulls in all the stardust on the map.
 
-## The spell tree
+## The sky
 
-One big tree shaped like a five-pointed star. Each point is an **element core**: a first spell in the middle, six spokes of nodes, a ring joining them and two to four **keystones** (diamond-shaped: big, with a catch). You can take any node next to one you already own. Small nodes are stat bumps; **notables** change how your magic works. Tap a node to see exactly how your numbers would change.
+The Moon sits in the middle with six simple stars around it: Bright Moon (+25% damage), Twin Bolt, Thick Fur, Quick Paws (+20% cast speed), Long Ears and Swift Hop.
 
-| Element | First spell | Some of its notables and keystones |
-|---|---|---|
-| Fire | Fireball | Scatter (1d4), Blast, Ignite, Fire Ring, Hot Paws (a path of fire behind you), Heavy Orb, Phoenix · Inferno Heart, Wildfire, Patient Flame, Ember Heart |
-| Frost | Ice Shard (piercing, chills) | Frost Nova, Ripples (1d3 waves), Icicle Fan, Shatter, Deep Freeze, Snow Pals, Yeti · Glacial Heart, Permafrost |
-| Storm | Zap Chain | Forked (1d6 + 1 jumps), Storm Call, Overload, Static, Thunderbolt, Endless Arc · Lightning Rod, Conductor |
-| Toxic | Poison Glob (lobbed, leaves a puddle) | Spores (1d3 globs), Stink Trail, Corrode, Toxic Bloom, Contagion, Bog, Miasma · Plague Bearer, Acid Blood |
-| Moon | Moon Orbs (three moons that breathe in and out; one beams) | Full Moon, Lunar Cycle, Werebunny, Crater Kick, Constellation (1d4 more moons), Tides, Moonbeam · Blood Moon, Gravity Moon |
+Each constellation is a new spell (free), three upgrades, and one bright star that changes how it works.
 
-### Everything else is sealed
+| Constellation | Spell | Upgrades | Bright star |
+|---|---|---|---|
+| The Fox | Foxfire: a fan of flames that set enemies alight | Kindle, Five Tails, Fire Path | Wildfire: burning enemies explode and spread fire |
+| The Stag | Frost Ring: pushes enemies back and slows them | Deep Winter, Shatter, Icicles | Freeze Solid: every third ring freezes |
+| The Owl | Chain Lightning: jumps between enemies | Forked, Static, Storm Cloud | Overload: lightning kills spark onto neighbors |
+| The Toad | Bog Bubble: a splat, then a poison puddle | Big Bog, Corrode, Sticky | Plague: the poisoned leave puddles behind |
+| The Moth | Moon Moths: circle you and bonk what comes close | Swarm, Moth Dust, Flutter | Moonbeam: every moth fires a beam |
+| The Whale | Whirlpool: drags a crowd together, then bursts | Undertow, Deep Water, Twin Tides | Leviathan: triple damage and a stun |
+| The Cat | Charm: the toughest nearby enemy fights for you | Crush, Two Hearts, Heartbreak | Nine Lives: get back up once a night |
+| The Hare | Lucky Dice: each Moonbolt cast rolls 1 to 3 bolts | Loaded Dice, Lucky Star, Jackpot | High Roller: a d20 every 12 seconds |
 
-A region opens when you carry every scroll it needs, and its first node comes free. Finding another element's scroll opens its whole core.
-
-| Needs | Region |
-|---|---|
-| Two neighboring elements | Frostfire (Fire + Frost), Thundersnow (Frost + Storm), Acid Rain (Storm + Toxic), Moonshrooms (Toxic + Moon), Harvest Moon (Moon + Fire) |
-| Two elements across the star | Plasma (Fire + Storm), Black Ice (Frost + Toxic), Charged Moons (Storm + Moon), Fumes (Fire + Toxic), Aurora (Frost + Moon) |
-| All five elements | Elemental Avatar, in the very middle |
-| Meteor, Sun, Green Flame, Totem | Fire's own branches: Cinder Rain, Little Suns, Verdant Flame, Flame Totem |
-| A branch plus an element | Comets, Thunderfall, Solar Arc, Eclipse, Rot Garden, Tesla Totems, Wicker Totems, and Weather Witch (Frost + Storm + Sun) |
-| Support scrolls | Charm (charmed enemies fight for you; Crush, Two Hearts, Love Bomb), Dizzy Dust (Spin Cycle, Clumsy, Bonk Party), Bubbles (Thick Bubble, Pop!), Mending (Blossom, Second Wind), Swift (Zoomies, Slipstream) |
-| Rare niche scrolls | Spirit (ghost friends), Burrow (carrot missiles, Rabbit Hole), Dice (Loaded Dice, Lucky Clover, Jackpot, Gambler), Clock (Slow Time, Stopwatch, Rewind), Mirror (reflections copy your attacks), Gravity (black holes) |
-| Niche combinations | Lucky Foot (Burrow + Dice), Singularity (Gravity + Meteor), Witching Hour (Moon + Spirit + Clock), Cataclysm (Meteor + Gravity + Storm), Unravel Reality (Clock + Mirror + Gravity + Dice) |
-
-There are about 245 nodes in 44 regions, and a run finds roughly 10 scrolls, so every run opens a different slice of the tree.
-
-## Enemies keep getting harder
-
-A **danger** tier under the timer climbs from Calm to Breezy, Tricky, Wild, Fierce, Frantic and Overtime. Each step adds new enemies:
-
-| Enemy | From | Behavior |
-|---|---|---|
-| Slime, bat | start | Swarm you |
-| Skeleton | 1:00 | Sturdier |
-| Ghost | 2:30 | Weaves and drifts through the crowd |
-| Mushroom | 3:30 | Keeps its distance and spits spores you need to dodge |
-| Jelly | 5:00 | Splits into two slimes when it pops |
-| Boar | 6:30 | Stops, stamps (a red **!** warns you), then charges in a straight line |
-| Golem | 8:30 | Slow, heavy, shrugs off knockback |
-
-On top of that: enemy health grows every minute (and faster after minute 8), spawn rates rise, and **horde waves** surround you with a ring of bats, slimes, ghosts, skeletons, boars or jellies on a schedule that repeats and grows.
+The constellations are built to work together without special rules: Shatter, Corrode and Deep Water raise all damage on chilled, poisoned or whirlpooled enemies; Whirlpool gathers crowds for rings, puddles and Wildfire; Lucky Star's critical hits apply to every spell.
 
 ## Tuning
 
-- `src/config.ts`: movement, enemies, danger tiers, waves, spawn and health curves, XP curve, drop rates.
-- `src/content.ts`: the tree (every node, region and requirement) and the support scrolls.
-- `src/game.ts`: every spell's numbers sit next to its code.
+- `src/config.ts`: movement, enemies, the spawn curve, waves, bosses, falling stars, stardust curve, and how much harder each night is.
+- `src/sky.ts`: the Moon's stars and the eight constellations (names, text, layout) and the 16-star limit.
+- `src/game.ts`: each spell's numbers sit next to its code.
 
 ## Balance bot
 
-`npm run sim -- [runs] [minutes] [style] [endless]` plays headless runs with a bot that kites enemies, sidesteps spores, picks up gems and scrolls (always preferring spell scrolls), and walks the tree toward named nodes (`style` "random" spends at random instead). It prints each run's time, level, what killed it, its scrolls, and which sources did the damage. Add `endless` to keep playing past 15:00.
+`npm run sim -- [runs] [night] [constellation]` plays whole nights with a bot that steers by testing directions for danger, walks to stardust, carrots and fallen stars, picks constellations at random, and lights random stars. It prints each run and then averages: survival time, time by starting constellation, stars earned by minute, damage per second by minute, crowd size by minute, and each spell's share of damage.
 
-The bot cycles through the five starting elements. At the time of writing, over 25 runs it survived on average: Fire 13:26, Storm 10:33, Toxic 10:58, Moon 6:37, Frost about 5 to 8 minutes (it varies a lot between batches). Fire is the strongest start and Moon and Frost the weakest, so those are the first things to tune. The bot is a poor dodger and walks away from enemies, which undersells melee builds like Moon.
+At the time of writing, over 32 runs on night 1 the bot reached dawn 10 times and survived 8:31 on average; every starting constellation averaged between 7:27 and 9:31. On night 3 it never reached dawn (5:11 on average over 16 runs). The bot picks stars at random, so a player who builds on purpose should do better.
 
 ## Code map
 
 | File | What it does |
 |---|---|
-| `src/main.ts` | Startup, HUD, input (keys and thumb stick), pausing, end screens, game loop |
-| `src/game.ts` | Simulation: player, enemies, every spell and tree effect, pickups |
-| `src/book.ts` | The tree's rules: taking and refunding nodes, scrolls and sealed regions |
-| `src/content.ts` | The tree: element cores, regions, scrolls, node text and layout |
-| `src/ui/spellbook.ts` | The draggable tree, node details, the scroll-found screen and the start picker |
-| `src/render.ts` | Draws the world, characters, spells and effects |
-| `src/sfx.ts` | Synthesized sound effects |
-| `src/art/` | All pixel art, generated in code: the bunny, enemies, helpers, spells, scrolls, tree icons, ground and props |
+| `src/main.ts` | Title, HUD, pause and end screens, input, saving, the game loop |
+| `src/game.ts` | Simulation: player, enemies, bosses, every spell, pickups, falling stars |
+| `src/sky.ts` | The sky: stars, constellations, and the rules for lighting them |
+| `src/ui/sky.ts` | The sky screen, the constellation picker, and the "constellation appears" animation |
+| `src/render.ts` | Draws the night meadow, characters, spells and effects |
+| `src/sfx.ts` | Synthesized sound effects and the generated lullaby |
+| `src/save.ts` | Best times, unlocked nights and settings (kept in the browser, if allowed) |
+| `src/art/` | All pixel art, generated in code |
 
-To inspect the art up close, run `npm run dev` and open `/art-preview.html?z=8`.
+## The earlier version
+
+`archive/v1-big-tree/` holds the previous game (five element cores, 245 nodes, 20 scrolls) exactly as it was. To play it: `npx vite archive/v1-big-tree`.

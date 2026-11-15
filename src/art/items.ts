@@ -556,3 +556,69 @@ export function glyphScroll(icon: HTMLCanvasElement, seal: Ramp): Sprite {
   for (const c of [s.n]) c.getContext("2d")!.drawImage(icon, 5, 7);
   return s;
 }
+
+// ---------- Night things ----------
+
+/** A little glowing moth, wings up or down. */
+export function mothSprite(up: boolean): Sprite {
+  const p = new Painter(11, 9);
+  const W: Ramp = ["#5a4a8a", "#9a86d8", "#d8c8ff", "#f4eeff", "#ffffff"];
+  const y = up ? 2.5 : 5;
+  p.ellipsoid(2.8, y, 2.6, up ? 2.6 : 2, W, { spec: 0.9 });
+  p.ellipsoid(8.2, y, 2.6, up ? 2.6 : 2, W, { spec: 0.9 });
+  p.column(2, 7.5, () => 5.5, () => 0.9, ["#3a2a50", "#6a5088", "#fff2b0", "#fff2b0"], { sep: 0.2 });
+  p.dot(5, 4, "#fff2b0");
+  return p.bake();
+}
+
+/** A fallen star: a plump five-pointed star with a face-free, friendly glow. */
+export function starSprite(): Sprite {
+  const S = 17;
+  const p = new Painter(S, S);
+  const G: Ramp = ["#8a5a14", "#d49a1c", "#ffd640", "#fff2a0", "#ffffff"];
+  const pts: [number, number][] = [];
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    const r = i % 2 ? 3.6 : 8;
+    pts.push([S / 2 + Math.cos(a) * r, S / 2 + 0.5 + Math.sin(a) * r]);
+  }
+  p.fill((x, y) => inPolyLocal(pts, x, y), G, (x, y) => 0.95 - Math.hypot(x - 6.5, y - 6) / 14);
+  p.dot(7, 6, "#ffffff");
+  p.dot(6, 7, "#ffffff");
+  return p.bake();
+}
+
+function inPolyLocal(pts: [number, number][], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** A bolt of moonlight: a bright bead with a soft tail, pointing along `angle`. */
+export function moonboltFrame(angle: number): Sprite {
+  const S = 13;
+  const p = new Painter(S, S);
+  const c = S / 2;
+  const ca = Math.cos(angle);
+  const sa = Math.sin(angle);
+  const M: Ramp = ["#3a4a8a", "#7a8ee0", "#c0d0ff", "#f0f4ff", "#ffffff"];
+  p.glow(
+    (x, y) => {
+      const u = (x - c) * ca + (y - c) * sa;
+      const w = -(x - c) * sa + (y - c) * ca;
+      if ((u - 1.5) ** 2 + w * w <= 2.6 * 2.6) return true;
+      return u < 1.5 && u > -5.5 && Math.abs(w) <= 2.4 * ((u + 5.5) / 7);
+    },
+    M,
+    (x, y) => {
+      const u = (x - c) * ca + (y - c) * sa;
+      const w = -(x - c) * sa + (y - c) * ca;
+      return 1 - Math.hypot((u - 1.5) * 0.6, w) / 4;
+    },
+  );
+  return p.bake(false);
+}

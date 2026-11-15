@@ -1,39 +1,37 @@
 import { batFrame, heroFrame, kingFrame, skeletonFrame, slimeFrame } from "./characters";
-import { JELLY, boarFrame, ghostFrame, golemFrame, shroomFrame, snowmanFrame, totemFrame, yetiFrame } from "./creatures";
-import { glyph } from "./glyphs";
-import {
-  Emblem, carrotSprite, chestSprite, fireballFrame, gemSprite, glowSprite, glyphScroll, magnetSprite, moonSprite, poofFrames,
-  scrollSprite, shadowSprite, sparkFrames, sunSprite,
-} from "./items";
-import { ALL_SCROLLS, SCROLLS, ScrollId } from "../content";
-import { RAMPS, Ramp } from "./palette";
+import { JELLY, boarFrame, ghostFrame, golemFrame, shroomFrame } from "./creatures";
+import { carrotSprite, fireballFrame, gemSprite, glowSprite, magnetSprite, moonboltFrame, mothSprite, poofFrames, shadowSprite, sparkFrames, starSprite } from "./items";
+import { RAMPS } from "./palette";
 import type { Sprite } from "./painter";
 import { CHUNK, PlacedProp, PropKit, chunkProps, groundChunk, makePropKit } from "./world";
 
 export type { Sprite } from "./painter";
 
-export const FIRE_DIRS = 16;
+export const DIRS = 16;
 
-/** Scrolls with a hand-painted emblem; the rest use a glyph. */
-const EMBLEMS: Partial<Record<ScrollId, Emblem>> = {
-  fire: "fire", frost: "frost", storm: "zap", toxic: "poison", moon: "moon", charm: "mend", ward: "ward",
-};
-export const SCROLL_GLYPH: Record<ScrollId, string> = {
-  fire: "flame", frost: "flake", storm: "bolt", toxic: "drop", moon: "moon", meteor: "meteor", suns: "sun", verdant: "flame",
-  totem: "totem", spirit: "ghost", burrow: "carrot", dice: "die", clock: "hourglass", mirror: "mirror", gravity: "vortex",
-  dizzy: "swirl", charm: "heart", mend: "leaf", ward: "shield", swift: "paw",
-};
-const seal = (color: string): Ramp => ["#140d1c", color, color, "#ffffff"];
+/** The night's color grade: everything on the ground is washed in cool moonlight. */
+const NIGHT_GROUND = "#4f6fb0";
+const NIGHT_PROPS = "#7f96cc";
 
-function scrollFor(id: ScrollId, color: string): Sprite {
-  const e = EMBLEMS[id];
-  return e ? scrollSprite(e) : glyphScroll(glyph(SCROLL_GLYPH[id], color), seal(color));
+/** Multiplies a canvas by a color, keeping its shape. */
+function grade(src: HTMLCanvasElement, color: string): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = src.width;
+  c.height = src.height;
+  const x = c.getContext("2d")!;
+  x.drawImage(src, 0, 0);
+  x.globalCompositeOperation = "multiply";
+  x.fillStyle = color;
+  x.fillRect(0, 0, c.width, c.height);
+  x.globalCompositeOperation = "destination-in";
+  x.drawImage(src, 0, 0);
+  return c;
 }
 
 /** All game art, generated once at startup. */
 export function buildArt() {
   const range = (n: number) => Array.from({ length: n }, (_, i) => i);
-  const fire: Sprite[][] = range(FIRE_DIRS).map((d) => range(3).map((f) => fireballFrame((d / FIRE_DIRS) * Math.PI * 2, f)));
+  const fire: Sprite[][] = range(DIRS).map((d) => range(3).map((f) => fireballFrame((d / DIRS) * Math.PI * 2, f)));
   const shadows = new Map<number, HTMLCanvasElement>();
   return {
     heroIdle: range(4).map((i) => heroFrame(i / 4, false)),
@@ -49,32 +47,22 @@ export function buildArt() {
     boar: range(4).map((i) => boarFrame(i / 4)),
     boarStamp: range(4).map((i) => boarFrame(i / 4, true)),
     golem: range(4).map((i) => golemFrame(i / 4)),
-    totem: range(4).map((i) => totemFrame(i / 4)),
-    wicker: range(4).map((i) => totemFrame(i / 4, true)),
-    snowman: range(4).map((i) => snowmanFrame(i / 4)),
-    yeti: range(4).map((i) => yetiFrame(i / 4)),
-    gem: gemSprite(RAMPS.gemBlue),
-    bigGem: gemSprite(RAMPS.gemPink, 1.35),
+    gem: gemSprite(["#2a2a6a", "#5a5ad0", "#9aa0ff", "#d8dcff", "#ffffff"]),
+    bigGem: gemSprite(RAMPS.gold, 1.35),
     magnet: magnetSprite(),
     carrot: carrotSprite(),
-    chest: chestSprite(),
-    sun: sunSprite(),
+    star: starSprite(),
+    moth: [mothSprite(true), mothSprite(false)],
+    bolt: range(DIRS).map((d) => moonboltFrame((d / DIRS) * Math.PI * 2)),
     fire,
     fireGlow: glowSprite(11, "#ff7a1a"),
-    greenGlow: glowSprite(11, "#7ad040"),
-    goldGlow: glowSprite(12, "#ffd640"),
-    orbGlow: glowSprite(8, "#8ae8ff"),
-    poof: poofFrames(7, 18),
-    spark: sparkFrames(),
-    scrolls: new Map<ScrollId, Sprite>(ALL_SCROLLS.map((id) => [id, scrollFor(id, SCROLLS[id].color)] as const)),
-    lootScroll: scrollSprite("mend"),
-    moon: moonSprite(false),
-    bigMoon: moonSprite(true),
-    moonGlow: glowSprite(9, "#fff2b0"),
-    lootGlow: glowSprite(14, "#ffd0f0"),
+    moonGlow: glowSprite(9, "#c0d0ff"),
+    goldGlow: glowSprite(14, "#ffd640"),
+    greenGlow: glowSprite(9, "#7ad040"),
     iceGlow: glowSprite(8, "#8fd8ff"),
     zapGlow: glowSprite(9, "#ffe46a"),
-    voidGlow: glowSprite(16, "#a070ff"),
+    poof: poofFrames(7, 18),
+    spark: sparkFrames(),
     shadow(w: number) {
       let s = shadows.get(w);
       if (!s) shadows.set(w, (s = shadowSprite(w)));
@@ -85,12 +73,19 @@ export function buildArt() {
 
 export type Art = ReturnType<typeof buildArt>;
 
-/** Ground and props, generated chunk by chunk as the camera moves. */
+/** Ground and props, generated chunk by chunk as the camera moves, in night colors. */
 export class WorldArt {
   private chunks = new Map<string, { canvas: HTMLCanvasElement; props: PlacedProp[]; used: number }>();
-  private kit: PropKit = makePropKit();
+  private kit: PropKit;
   private queue: [number, number][] = [];
   readonly size = CHUNK;
+
+  constructor() {
+    const kit = makePropKit();
+    for (const list of [kit.trees, kit.bushes, kit.rocks, kit.mushrooms, [kit.stump], kit.grass])
+      for (const p of list) p.sprite = { ...p.sprite, n: grade(p.sprite.n, NIGHT_PROPS) };
+    this.kit = kit;
+  }
 
   private key(cx: number, cy: number) {
     return cx + "," + cy;
@@ -100,7 +95,7 @@ export class WorldArt {
     const k = this.key(cx, cy);
     let ch = this.chunks.get(k);
     if (!ch) {
-      ch = { canvas: groundChunk(cx * CHUNK, cy * CHUNK), props: chunkProps(cx, cy, this.kit), used: frame };
+      ch = { canvas: grade(groundChunk(cx * CHUNK, cy * CHUNK), NIGHT_GROUND), props: chunkProps(cx, cy, this.kit), used: frame };
       this.chunks.set(k, ch);
     }
     ch.used = frame;

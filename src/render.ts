@@ -1,9 +1,9 @@
-import { Art, FIRE_DIRS, Sprite, WorldArt, buildArt } from "./art";
+import { Art, DIRS, Sprite, WorldArt, buildArt } from "./art";
 import { numberSprite } from "./art/font";
 import { OUTLINE } from "./art/palette";
 import type { PlacedProp } from "./art/world";
 import { CFG } from "./config";
-import type { DamageNumber, Enemy, Flames, Game, Theme, Totem } from "./game";
+import type { DamageNumber, Enemy, Game, Puddle, RingTheme } from "./game";
 
 export interface Joystick {
   active: boolean;
@@ -14,34 +14,26 @@ export interface Joystick {
 }
 
 type R = (v: number) => number;
-type Drawable = { y: number; e?: Enemy; prop?: PlacedProp; player?: true; totem?: Totem; echo?: { x: number; y: number } };
+type Drawable = { y: number; e?: Enemy; prop?: PlacedProp; player?: true };
 
-const RING_COLORS: Record<Theme, [string, string, string, string]> = {
+const RING_COLORS: Record<RingTheme, [string, string, string, string]> = {
   ice: ["#ffffff", "#8fd8ff", "#50b8f0", "#2490d0"],
   fire: ["#fffbe0", "#ffe46a", "#ffa424", "#f05a1a"],
-  green: ["#f0ffd0", "#c8f080", "#7ad040", "#3f8a2a"],
-  toxic: ["#f0ffd0", "#c8f080", "#7ad040", "#245c22"],
-  steam: ["#ffffff", "#e8f4ff", "#c0d4e8", "#90a8c0"],
-  dirt: ["#f0d6a0", "#bc9a72", "#9c7656", "#4e3430"],
-  void: ["#e0c8ff", "#a070ff", "#64309a", "#1a0f2e"],
-};
-const GROUND_RAMPS: Record<Theme, string[]> = {
-  toxic: ["#0c2010", "#173d1c", "#245c22", "#3f8a2a", "#7ad040", "#c8f080"],
-  fire: ["#3a0f0a", "#6e2410", "#b0441a", "#e0702a", "#ffc040", "#fff0a0"],
-  green: ["#0c2010", "#16401c", "#23662a", "#3f9a36", "#8ad850", "#d8ff90"],
-  ice: ["#16304a", "#2a5a80", "#4a8ac0", "#8fd8ff", "#d0f0ff", "#ffffff"],
-  steam: ["#5a6a7a", "#7a8a9a", "#a0b0c0", "#c8d4e0", "#e8f0f8", "#ffffff"],
-  dirt: ["#2e1c1c", "#4e3430", "#7a5440", "#9c7656", "#bc9a72", "#d8c0a0"],
-  void: ["#0a0614", "#1a0f2e", "#3a1d5c", "#64309a", "#a070ff", "#e0c8ff"],
+  star: ["#ffffff", "#fff2b0", "#ffd640", "#d49a1c"],
+  heart: ["#ffffff", "#ffd0f0", "#ff80c0", "#c23a9c"],
+  water: ["#ffffff", "#c0e4ff", "#6ab8ff", "#2a70c0"],
 };
 
 export class Renderer {
   readonly art: Art = buildArt();
+  /** Turn off for players who don't want the screen to shake. */
+  shakeOn = true;
   private world = new WorldArt();
   private frame = 0;
-  private vignette: HTMLCanvasElement | null = null;
-  private redVignette: HTMLCanvasElement | null = null;
-  private vignetteKey = "";
+  private dark: HTMLCanvasElement | null = null;
+  private red: HTMLCanvasElement | null = null;
+  private light: HTMLCanvasElement | null = null;
+  private sizeKey = "";
 
   draw(ctx: CanvasRenderingContext2D, g: Game, scale: number, realTime: number, joy: Joystick) {
     this.frame++;
@@ -53,14 +45,12 @@ export class Renderer {
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     ctx.imageSmoothingEnabled = false;
 
-    const shx = g.shake > 0 ? (Math.random() * 2 - 1) * g.shake : 0;
-    const shy = g.shake > 0 ? (Math.random() * 2 - 1) * g.shake : 0;
-    const camX = p.x - vw / 2 + shx;
-    const camY = p.y - 8 - vh / 2 + shy;
+    const sh = this.shakeOn ? g.shake : 0;
+    const camX = p.x - vw / 2 + (sh > 0 ? (Math.random() * 2 - 1) * sh : 0);
+    const camY = p.y - 8 - vh / 2 + (sh > 0 ? (Math.random() * 2 - 1) * sh : 0);
     // Snap to screen pixels (not art pixels): motion stays smooth while sprites stay crisp.
     const R: R = (v: number) => Math.round(v * scale) / scale;
-    const img = (c: HTMLCanvasElement, wx: number, wy: number, w = c.width, h = c.height) =>
-      ctx.drawImage(c, R(wx - camX), R(wy - camY), w, h);
+    const img = (c: HTMLCanvasElement, wx: number, wy: number, w = c.width, h = c.height) => ctx.drawImage(c, R(wx - camX), R(wy - camY), w, h);
     const glow = (c: HTMLCanvasElement, x: number, y: number, k: number, alpha: number) => {
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = alpha;
@@ -68,6 +58,7 @@ export class Renderer {
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
     };
+    this.prepare(vw, vh);
 
     // ---------- Ground ----------
     const C = this.world.size;
@@ -75,11 +66,9 @@ export class Renderer {
     const cy0 = Math.floor(camY / C);
     const cx1 = Math.floor((camX + vw) / C);
     const cy1 = Math.floor((camY + vh) / C);
-    for (let cy = cy0; cy <= cy1; cy++)
-      for (let cx = cx0; cx <= cx1; cx++) img(this.world.get(cx, cy, this.frame).canvas, cx * C, cy * C);
+    for (let cy = cy0; cy <= cy1; cy++) for (let cx = cx0; cx <= cx1; cx++) img(this.world.get(cx, cy, this.frame).canvas, cx * C, cy * C);
     this.world.prefetch(cx0, cy0, cx1, cy1, this.frame);
 
-    // Props near the view (tall trees can reach in from below)
     const props: PlacedProp[] = [];
     for (let cy = Math.floor((camY - 8) / C); cy <= Math.floor((camY + vh + 70) / C); cy++)
       for (let cx = Math.floor((camX - 40) / C); cx <= Math.floor((camX + vw + 40) / C); cx++)
@@ -88,50 +77,74 @@ export class Renderer {
           props.push(pr);
         }
 
+    // Your staff lights the grass around you
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.5 + Math.sin(realTime * 2) * 0.04;
+    ctx.imageSmoothingEnabled = true;
+    const L = this.light!;
+    ctx.drawImage(L, R(p.x - camX) - 80, R(p.y - 10 - camY) - 64, 160, 128);
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
     // Only trees are tall enough to stand in front of characters; small props are part of the ground.
-    ctx.globalAlpha = 0.28;
+    ctx.globalAlpha = 0.3;
     for (const pr of props) if (pr.art.shadow) this.shadow(ctx, pr.x, pr.y, pr.art.shadow, R, camX, camY);
     ctx.globalAlpha = 1;
-    for (const pr of props) if (!pr.art.tall) img(pr.art.sprite.n, pr.x - pr.art.ax, pr.y - pr.art.ay);
+    for (const pr of props)
+      if (!pr.art.tall) {
+        img(pr.art.sprite.n, pr.x - pr.art.ax, pr.y - pr.art.ay);
+        // Mushrooms glow softly at night
+        if (pr.art.sprite.w <= 16 && pr.art.sprite.h === 15) glow(A.fireGlow, pr.x, pr.y - 7, 0.9, 0.22 + Math.sin(realTime * 1.7 + pr.x) * 0.06);
+      }
 
     // ---------- Things on the ground ----------
-    for (const f of g.flames) this.drawGround(ctx, f, R, camX, camY, realTime);
-    for (const tr of g.trails) this.drawTrail(ctx, tr, g.time, R, camX, camY, realTime);
-    for (const h of g.holes) this.drawHole(ctx, h.x, h.y, h.r, h.t, h.dur, R, camX, camY, realTime);
-    // Meteor target shadows grow as the rock falls
-    for (const m of g.meteors) {
-      const k = Math.min(1, m.t / m.fall);
-      ctx.globalAlpha = 0.25 + k * 0.3;
-      ctx.fillStyle = m.kind === "hail" ? "#2a4a6a" : "#3a0f0a";
-      ctx.beginPath();
-      ctx.ellipse(R(m.x - camX), R(m.y - camY), m.r * (0.3 + k * 0.7), m.r * 0.8 * (0.3 + k * 0.7), 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 0.6 * k;
-      ctx.strokeStyle = m.kind === "hail" ? "#cfefff" : "#ffa424";
+    for (const f of g.puddles) this.drawPuddle(ctx, f, R, camX, camY, realTime);
+    for (const h of g.pools) this.drawPool(ctx, h.x, h.y, h.r, h.t, h.dur, R, camX, camY, realTime);
+    this.drawPath(ctx, g.path, t, R, camX, camY, realTime);
+    // Where a falling star will land
+    for (const s of g.starfalls) {
+      const k = s.t / s.dur;
+      ctx.globalAlpha = 0.25 + k * 0.4;
+      ctx.strokeStyle = "#fff2b0";
       ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(R(s.x - camX), R(s.y - camY), 6 + (1 - k) * 22, (6 + (1 - k) * 22) * 0.7, 0, 0, Math.PI * 2);
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
 
-    ctx.globalAlpha = 0.28;
+    ctx.globalAlpha = 0.3;
     for (const e of g.enemies) this.shadow(ctx, e.x, e.y, shadowW(e), R, camX, camY);
-    for (const tt of g.totems) this.shadow(ctx, tt.x, tt.y, 14, R, camX, camY);
-    if (p.under <= 0) this.shadow(ctx, p.x, p.y, 14, R, camX, camY);
+    this.shadow(ctx, p.x, p.y, 14, R, camX, camY);
     ctx.globalAlpha = 1;
 
     // ---------- Pickups ----------
     for (const gem of g.gems) {
-      const s = gem.value >= 5 ? A.bigGem : A.gem;
+      const s = gem.value >= 3 ? A.bigGem : A.gem;
       const bob = gem.magnet ? 0 : Math.round(Math.sin(t * 3 + gem.x * 0.7) * 1.2);
       img(s.n, gem.x - s.w / 2, gem.y - s.h + 2 + bob);
-      if (((realTime * 0.8 + gem.x * 0.013 + gem.y * 0.007) % 1) < 0.06) img(A.spark[0], gem.x - 1, gem.y - s.h - 1);
+      if (((realTime * 0.8 + gem.x * 0.013 + gem.y * 0.007) % 1) < 0.08) img(A.spark[0], gem.x - 1, gem.y - s.h - 1);
     }
     for (const d of g.loot) {
       const bob = Math.round(Math.sin(realTime * 4 + d.x) * 2);
-      const s = d.kind === "scroll" ? A.lootScroll : d.kind === "magnet" ? A.magnet : d.kind === "carrot" ? A.carrot : A.chest;
-      const gl = d.kind === "scroll" ? A.lootGlow : d.kind === "magnet" ? A.zapGlow : d.kind === "carrot" ? A.fireGlow : A.goldGlow;
-      glow(gl, d.x, d.y - s.h / 2 - 2 + bob, 1, 0.55 + Math.sin(realTime * 6) * 0.25);
-      img(s.n, d.x - s.w / 2, d.y - s.h - 2 + bob);
+      if (d.kind === "star") {
+        // A fallen star: a pillar of light you can see from far away
+        ctx.globalCompositeOperation = "lighter";
+        const grd = ctx.createLinearGradient(0, R(d.y - 150 - camY), 0, R(d.y - camY));
+        grd.addColorStop(0, "rgba(255,242,176,0)");
+        grd.addColorStop(1, `rgba(255,242,176,${0.28 + Math.sin(realTime * 3) * 0.08})`);
+        ctx.fillStyle = grd;
+        ctx.fillRect(R(d.x - 5 - camX), R(d.y - 150 - camY), 10, 150);
+        ctx.globalCompositeOperation = "source-over";
+        glow(A.goldGlow, d.x, d.y - 10 + bob, 2, 0.6 + Math.sin(realTime * 5) * 0.2);
+        img(A.star.n, d.x - A.star.w / 2, d.y - A.star.h - 1 + bob);
+        continue;
+      }
+      const s = d.kind === "magnet" ? A.magnet : A.carrot;
+      const big = d.kind === "feast" ? 2 : 1;
+      glow(d.kind === "magnet" ? A.zapGlow : A.fireGlow, d.x, d.y - (s.h * big) / 2 - 2 + bob, big, 0.5 + Math.sin(realTime * 6) * 0.2);
+      img(s.n, d.x - (s.w * big) / 2, d.y - s.h * big - 2 + bob, s.w * big, s.h * big);
     }
 
     // ---------- Death puffs, under the living so they never hide the wizard ----------
@@ -145,27 +158,22 @@ export class Renderer {
     }
     ctx.globalAlpha = 1;
 
-    // ---------- Characters and props, back to front ----------
+    // ---------- Characters and trees, back to front ----------
     const list: Drawable[] = [];
     for (const pr of props) if (pr.art.tall) list.push({ y: pr.y, prop: pr });
     for (const e of g.enemies) list.push({ y: e.y, e });
-    for (const tt of g.totems) list.push({ y: tt.y, totem: tt });
-    for (const ec of g.echoes) list.push({ y: ec.y, echo: ec });
     list.push({ y: p.y, player: true });
     list.sort((a, b) => a.y - b.y);
     for (const d of list) {
       if (d.player) this.drawPlayer(ctx, g, R, camX, camY, realTime);
       else if (d.e) this.drawEnemy(ctx, d.e, g, R, camX, camY, realTime);
-      else if (d.totem) this.drawTotem(ctx, d.totem, g, R, camX, camY, realTime);
-      else if (d.echo) this.drawEcho(ctx, d.echo, g, R, camX, camY, realTime);
       else if (d.prop) {
         const pr = d.prop;
         const s = pr.art.sprite;
         const x = pr.x - pr.art.ax;
         const y = pr.y - pr.art.ay;
         // See-through when the player walks behind a tree
-        const behind = pr.art.tall && p.y < pr.y && p.y > y + 6 && Math.abs(p.x - pr.x) < s.w / 2;
-        if (behind) ctx.globalAlpha = 0.55;
+        if (p.y < pr.y && p.y > y + 6 && Math.abs(p.x - pr.x) < s.w / 2) ctx.globalAlpha = 0.55;
         img(s.n, x, y);
         ctx.globalAlpha = 1;
       }
@@ -173,13 +181,17 @@ export class Renderer {
 
     // ---------- Projectiles ----------
     for (const s of g.shots) {
-      if (s.kind === "fire" || s.kind === "orb") glow(s.green ? A.greenGlow : A.fireGlow, s.x, s.y, s.kind === "orb" ? 2 : 1, 0.6);
-      else if (s.kind === "spore") glow(A.greenGlow, s.x, s.y, 0.7, 0.6);
-    }
-    for (const s of g.shots) {
       const a = Math.atan2(s.vy, s.vx);
-      if (s.kind === "shard") {
-        // A short spike of ice pointing where it flies
+      const dir = ((Math.round((a / (Math.PI * 2)) * DIRS) % DIRS) + DIRS) % DIRS;
+      if (s.kind === "bolt") {
+        glow(A.moonGlow, s.x, s.y, 1, 0.7);
+        const fr = A.bolt[dir].n;
+        img(fr, s.x - fr.width / 2, s.y - fr.height / 2);
+      } else if (s.kind === "flame") {
+        glow(A.fireGlow, s.x, s.y, 1, 0.6);
+        const fr = A.fire[dir][Math.floor(realTime * 14 + s.x * 0.05) % 3].n;
+        img(fr, s.x - fr.width / 2, s.y - fr.height / 2);
+      } else if (s.kind === "icicle") {
         const len = 7;
         ctx.strokeStyle = "#2490d0";
         ctx.lineWidth = 3;
@@ -190,49 +202,31 @@ export class Renderer {
         ctx.strokeStyle = "#e8f8ff";
         ctx.lineWidth = 1.5;
         ctx.stroke();
-      } else if (s.kind === "glob") {
-        ctx.globalAlpha = 0.3;
-        ctx.fillStyle = "#1a1430";
-        ctx.fillRect(R(s.x - 2 - camX), R(s.y + 6 - camY), 4, 1);
-        ctx.globalAlpha = 1;
-        this.ball(ctx, s.x, s.y - 4 - Math.sin(Math.min(1, s.life * 2) * Math.PI) * 6, 3, "#c8f080", "#3f8a2a", R, camX, camY);
-      } else if (s.kind === "snow") {
-        this.ball(ctx, s.x, s.y, 2.5, "#ffffff", "#9cb0d0", R, camX, camY);
-      } else if (s.kind === "spore") {
-        this.ball(ctx, s.x, s.y, 2.5, "#c8f080", "#3f8a2a", R, camX, camY);
-      } else if (s.kind === "carrot") {
-        const c = A.carrot;
-        ctx.save();
-        ctx.translate(R(s.x - camX), R(s.y - camY));
-        ctx.rotate(a + Math.PI * 0.75);
-        ctx.drawImage(c.n, -c.w / 2, -c.h / 2);
-        ctx.restore();
       } else {
-        const dir = ((Math.round((a / (Math.PI * 2)) * FIRE_DIRS) % FIRE_DIRS) + FIRE_DIRS) % FIRE_DIRS;
-        let fr = A.fire[dir][Math.floor(realTime * 14 + s.x * 0.05) % 3].n;
-        if (s.green) fr = greenFire(fr);
-        const k = s.kind === "orb" ? 2 : 1;
-        img(fr, s.x - (fr.width * k) / 2, s.y - (fr.height * k) / 2, fr.width * k, fr.height * k);
+        // A bog bubble, lobbed in an arc
+        const arc = Math.sin(Math.min(1, s.life * 2.2) * Math.PI) * 10;
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = "#0a0614";
+        ctx.fillRect(R(s.x - 2 - camX), R(s.y - camY), 4, 1);
+        ctx.globalAlpha = 1;
+        glow(A.greenGlow, s.x, s.y - 8 - arc, 0.8, 0.5);
+        this.ball(ctx, s.x, s.y - 8 - arc, 3, "#c8f080", "#3f8a2a", R, camX, camY);
       }
     }
     for (const s of g.spits) {
-      glow(A.greenGlow, s.x, s.y, 0.6, 0.45);
-      this.ball(ctx, s.x, s.y, 3, "#d8a0ff", "#64309a", R, camX, camY);
-      ctx.fillStyle = "#c8f080";
-      ctx.fillRect(R(s.x - 1 - camX), R(s.y - 1 - camY), 1, 1);
+      glow(A.zapGlow, s.x, s.y, 0.6, 0.35);
+      this.ball(ctx, s.x, s.y, 2.5, "#e8c0ff", "#8a40c0", R, camX, camY);
     }
 
-    // ---------- Orbiters ----------
-    for (const s of g.suns) glow(A.fireGlow, s.x, s.y, 1.2, 0.55);
-    for (const m of g.moons) glow(A.moonGlow, m.x, m.y, m.big ? 1.6 : 1, 0.45);
-    for (const s of g.suns) img(A.sun.n, s.x - A.sun.w / 2, s.y - A.sun.h / 2);
-    for (const m of g.moons) {
-      const s = m.big ? A.bigMoon : A.moon;
+    // ---------- Moths ----------
+    for (const m of g.moths) {
+      glow(A.moonGlow, m.x, m.y, 1.3, 0.6);
+      const s = A.moth[Math.floor(realTime * 14 + m.x * 0.1) % 2];
       img(s.n, m.x - s.w / 2, m.y - s.h / 2);
     }
 
     // ---------- Rings ----------
-    for (const n of g.novas) {
+    for (const n of g.rings) {
       const k = Math.min(1, n.t / 0.35);
       const ring = this.ringSprite(Math.max(3, Math.round(n.r * k)), n.theme);
       ctx.globalAlpha = n.t > 0.35 ? Math.max(0, 1 - (n.t - 0.35) / 0.25) : 1;
@@ -240,39 +234,45 @@ export class Renderer {
       ctx.globalAlpha = 1;
     }
 
-    // ---------- Falling meteors and hail ----------
-    for (const m of g.meteors) {
-      const k = Math.min(1, m.t / m.fall);
-      const h = (1 - k) * (m.kind === "giant" ? 260 : 150);
-      const x = m.x + (1 - k) * 60;
-      const y = m.y - h;
-      if (m.kind === "hail") {
-        this.ball(ctx, m.x, y + 40 * (1 - k), 2, "#ffffff", "#8fd8ff", R, camX, camY);
-        continue;
+    // ---------- Stars on their way down ----------
+    for (const s of g.starfalls) {
+      const k = s.t / s.dur;
+      const x = s.x + (1 - k) * 90;
+      const y = s.y - (1 - k) * 260;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineCap = "round";
+      for (const [w, a] of [[6, 0.25], [3, 0.6], [1.2, 1]] as const) {
+        ctx.strokeStyle = `rgba(255,242,176,${a})`;
+        ctx.lineWidth = w;
+        ctx.beginPath();
+        ctx.moveTo(R(x + 26 - camX), R(y - 75 - camY));
+        ctx.lineTo(R(x - camX), R(y - camY));
+        ctx.stroke();
       }
-      const dir = Math.round(((Math.atan2(150, -60) / (Math.PI * 2)) * FIRE_DIRS + FIRE_DIRS) % FIRE_DIRS);
-      const fr = A.fire[dir][Math.floor(realTime * 14) % 3].n;
-      const sc = m.kind === "giant" ? 5 : 2;
-      glow(A.fireGlow, x, y, sc, 0.7);
-      img(fr, x - (fr.width * sc) / 2, y - (fr.height * sc) / 2, fr.width * sc, fr.height * sc);
+      ctx.globalCompositeOperation = "source-over";
+      glow(A.goldGlow, x, y, 1.6, 0.9);
+      img(A.star.n, x - A.star.w / 2, y - A.star.h / 2);
     }
 
-    // ---------- Lightning ----------
+    // ---------- Lightning and moonbeams ----------
     if (g.bolts.length) {
       ctx.globalCompositeOperation = "lighter";
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       for (const b of g.bolts) {
-        const path = this.boltPath(b.pts, b.t);
+        const path = b.beam ? b.pts : this.boltPath(b.pts, b.t);
         const fade = Math.max(0, 1 - b.t / 0.2);
-        for (const [w, col] of [[6, `rgba(255,190,60,${0.3 * fade})`], [3, `rgba(255,240,140,${0.95 * fade})`], [1.2, `rgba(255,255,255,${fade})`]] as const) {
+        const cols = b.beam
+          ? ([[4, `rgba(160,180,255,${0.35 * fade})`], [1.5, `rgba(240,244,255,${fade})`]] as const)
+          : ([[6, `rgba(255,190,60,${0.3 * fade})`], [3, `rgba(255,240,140,${0.95 * fade})`], [1.2, `rgba(255,255,255,${fade})`]] as const);
+        for (const [w, col] of cols) {
           ctx.strokeStyle = col;
           ctx.lineWidth = w;
           ctx.beginPath();
           path.forEach(([x, y], i) => (i ? ctx.lineTo(R(x - camX), R(y - camY)) : ctx.moveTo(R(x - camX), R(y - camY))));
           ctx.stroke();
         }
-        for (const [x, y] of b.pts.slice(1)) img(A.zapGlow, x - A.zapGlow.width / 2, y - A.zapGlow.height / 2);
+        if (!b.beam) for (const [x, y] of b.pts.slice(1)) img(A.zapGlow, x - A.zapGlow.width / 2, y - A.zapGlow.height / 2);
       }
       ctx.globalCompositeOperation = "source-over";
     }
@@ -286,9 +286,8 @@ export class Renderer {
     for (const f of g.fx) {
       const k = f.t / f.dur;
       if (f.kind === "poof" || f.kind === "flash") continue;
-      if (f.kind === "spark") {
-        img(A.spark[Math.min(2, Math.floor(k * 3))], f.x - 2, f.y - 2);
-      } else if (f.kind === "blast") {
+      if (f.kind === "spark") img(A.spark[Math.min(2, Math.floor(k * 3))], f.x - 2, f.y - 2);
+      else if (f.kind === "blast") {
         const r = (8 + k * 22) * f.scale;
         ctx.globalAlpha = (1 - k) * 0.5;
         ctx.fillStyle = f.color ?? "#ffa424";
@@ -300,25 +299,13 @@ export class Renderer {
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.globalAlpha = 1;
-      } else if (f.kind === "dust") {
-        // A swirly purple cloud
-        for (let i = 0; i < 9; i++) {
-          const a = i * 0.7 + k * 3;
-          const r = (10 + k * 30) * f.scale * (0.5 + (i % 3) * 0.25);
-          ctx.globalAlpha = (1 - k) * 0.5;
-          ctx.fillStyle = i % 2 ? "#c8a0ff" : "#ffffff";
-          ctx.beginPath();
-          ctx.arc(R(f.x + Math.cos(a) * r - camX), R(f.y + Math.sin(a) * r * 0.6 - camY), 4 + (1 - k) * 4, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        ctx.globalAlpha = 1;
       } else if (f.kind === "heart") {
         ctx.globalAlpha = 1 - k;
         this.heart(ctx, f.x, f.y - k * 14, R, camX, camY);
         ctx.globalAlpha = 1;
       } else {
         ctx.globalAlpha = 1 - k;
-        ctx.strokeStyle = f.kind === "heal" ? "#b8f080" : "#c6fbff";
+        ctx.strokeStyle = f.color ?? "#fff2b0";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(R(f.x - camX), R(f.y - camY), 6 + k * 30 * f.scale, 0, Math.PI * 2);
@@ -327,12 +314,28 @@ export class Renderer {
       }
     }
 
+    // Fireflies drifting through the night
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 0; i < 14; i++) {
+      const fx = ((i * 137.5 + Math.sin(realTime * 0.3 + i) * 30 - camX * 0.9) % (vw + 40) + vw + 40) % (vw + 40) - 20;
+      const fy = ((i * 89.3 + Math.cos(realTime * 0.23 + i * 2) * 24 - camY * 0.9) % (vh + 40) + vh + 40) % (vh + 40) - 20;
+      const tw = 0.5 + Math.sin(realTime * 2 + i * 1.7) * 0.5;
+      if (tw < 0.25) continue;
+      ctx.globalAlpha = tw * 0.8;
+      ctx.fillStyle = "#e8ff9a";
+      ctx.fillRect(Math.round(fx), Math.round(fy), 1, 1);
+      ctx.globalAlpha = tw * 0.25;
+      ctx.fillRect(Math.round(fx) - 1, Math.round(fy) - 1, 3, 3);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
     // ---------- Damage numbers: pop up, then float away ----------
     for (const n of g.nums) {
       const pop = n.t < 0.06 ? 3 : n.t < 0.12 ? 1 : 0;
-      const [col, sh] = NUMBER_COLORS[n.style];
-      const c = numberSprite(String(n.value), col, sh);
-      const sc = n.style === "big" || n.style === "heal" || n.style === "max" ? 2 : 1;
+      const [col, shade] = NUMBER_COLORS[n.style];
+      const c = numberSprite(String(n.value), col, shade);
+      const sc = n.style === "big" || n.style === "heal" || n.style === "roll" || n.style === "crit" ? 2 : 1;
       ctx.globalAlpha = n.t > 0.5 ? 1 - (n.t - 0.5) / 0.2 : 1;
       img(c, n.x - (c.width * sc) / 2, n.y - n.t * 22 - pop, c.width * sc, c.height * sc);
       ctx.globalAlpha = 1;
@@ -340,88 +343,121 @@ export class Renderer {
 
     // ---------- Player health bar ----------
     const frac = p.hp / p.maxHp;
-    if (p.under <= 0) {
-      const hpw = 16;
-      const hx = R(p.x - hpw / 2 - camX);
-      const hy = R(p.y + 5 - camY);
-      ctx.fillStyle = OUTLINE;
-      ctx.fillRect(hx - 1, hy - 1, hpw + 2, 4);
-      ctx.fillStyle = "#3a1530";
-      ctx.fillRect(hx, hy, hpw, 2);
-      ctx.fillStyle = frac < 0.3 ? "#ffa424" : "#e8304a";
-      ctx.fillRect(hx, hy, Math.ceil(hpw * frac), 2);
-      ctx.fillStyle = "rgba(255,255,255,0.35)";
-      ctx.fillRect(hx, hy, Math.ceil(hpw * frac), 1);
-    }
+    const hpw = 16;
+    const hx = R(p.x - hpw / 2 - camX);
+    const hy = R(p.y + 5 - camY);
+    ctx.fillStyle = OUTLINE;
+    ctx.fillRect(hx - 1, hy - 1, hpw + 2, 4);
+    ctx.fillStyle = "#3a1530";
+    ctx.fillRect(hx, hy, hpw, 2);
+    ctx.fillStyle = frac < 0.3 ? "#ffa424" : "#e8304a";
+    ctx.fillRect(hx, hy, Math.ceil(hpw * frac), 2);
 
     // ---------- Screen-wide moods ----------
-    const tint = (color: string, alpha: number) => {
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = color;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.dark!, 0, 0, vw, vh);
+    if (frac < 0.3) {
+      ctx.globalAlpha = Math.min(1, (0.3 - frac) * 4) * (0.55 + Math.sin(realTime * 6) * 0.35);
+      ctx.drawImage(this.red!, 0, 0, vw, vh);
+      ctx.globalAlpha = 1;
+    }
+    ctx.imageSmoothingEnabled = false;
+    // The sky lightens in the last minute before dawn
+    const dawn = Math.max(0, (t - (CFG.nightLength - 60)) / 60);
+    if (dawn > 0) {
+      ctx.globalAlpha = dawn * 0.22;
+      ctx.fillStyle = "#ffb070";
       ctx.fillRect(0, 0, vw, vh);
       ctx.globalAlpha = 1;
-    };
-    if (g.weather === "blizzard") {
-      tint("#d8f0ff", 0.16);
-      ctx.fillStyle = "#ffffff";
-      for (let i = 0; i < 70; i++) {
-        const x = (i * 97.3 + realTime * 60 * (1 + (i % 3) * 0.3)) % vw;
-        const y = (i * 53.9 + realTime * 40 * (1 + (i % 4) * 0.2)) % vh;
-        ctx.fillRect(Math.round(x), Math.round(y), 1 + (i % 2), 1 + (i % 2));
+    }
+    for (const f of g.fx)
+      if (f.kind === "flash") {
+        ctx.globalAlpha = (1 - f.t / f.dur) * 0.45;
+        ctx.fillStyle = f.color ?? "#ffffff";
+        ctx.fillRect(0, 0, vw, vh);
+        ctx.globalAlpha = 1;
       }
-    } else if (g.weather === "thunder") tint("#1a2a5a", 0.22);
-    else if (g.weather === "heat") tint("#ff7a1a", 0.12 + Math.sin(realTime * 3) * 0.03);
-    if (g.fullMoon) tint("#c8d0ff", 0.08);
-    if (g.midnight > 0) tint("#3a1d5c", 0.28);
-    if (g.timeStop > 0) tint("#a8a0d0", 0.28);
-    if (g.dark > 0) tint("#0a0614", Math.min(0.55, g.dark * 0.4));
-    for (const f of g.fx) if (f.kind === "flash") tint(f.color ?? "#ffffff", (1 - f.t / f.dur) * 0.4);
 
-    // ---------- Arrows toward scrolls and chests off screen ----------
-    for (const d of g.loot) {
-      if (d.kind !== "scroll" && d.kind !== "chest") continue;
+    // ---------- Arrows toward fallen stars off screen ----------
+    for (const d of [...g.loot.filter((l) => l.kind === "star"), ...g.starfalls]) {
       const sx = d.x - camX;
       const sy = d.y - 10 - camY;
-      if (sx > 6 && sx < vw - 6 && sy > 6 && sy < vh - 6) continue;
+      if (sx > 8 && sx < vw - 8 && sy > 8 && sy < vh - 8) continue;
       const a = Math.atan2(sy - vh / 2, sx - vw / 2);
-      const k = Math.min((vw / 2 - 14) / Math.abs(Math.cos(a) || 1e-6), (vh / 2 - 30) / Math.abs(Math.sin(a) || 1e-6));
-      const ax = vw / 2 + Math.cos(a) * k;
-      const ay = vh / 2 + Math.sin(a) * k;
+      const k = Math.min((vw / 2 - 14) / Math.abs(Math.cos(a) || 1e-6), (vh / 2 - 34) / Math.abs(Math.sin(a) || 1e-6));
       ctx.save();
-      ctx.translate(Math.round(ax), Math.round(ay));
+      ctx.translate(Math.round(vw / 2 + Math.cos(a) * k), Math.round(vh / 2 + Math.sin(a) * k));
       ctx.rotate(a);
+      const pulse = 1 + Math.sin(realTime * 6) * 0.15;
+      ctx.scale(pulse, pulse);
       ctx.fillStyle = OUTLINE;
       ctx.beginPath();
-      ctx.moveTo(7, 0);
-      ctx.lineTo(-5, -6);
-      ctx.lineTo(-5, 6);
+      ctx.moveTo(8, 0);
+      ctx.lineTo(-5, -7);
+      ctx.lineTo(-5, 7);
       ctx.fill();
-      ctx.fillStyle = d.kind === "scroll" ? "#ffd0f0" : "#ffd640";
+      ctx.fillStyle = "#ffd640";
       ctx.beginPath();
-      ctx.moveTo(5, 0);
-      ctx.lineTo(-4, -4);
-      ctx.lineTo(-4, 4);
+      ctx.moveTo(6, 0);
+      ctx.lineTo(-4, -5);
+      ctx.lineTo(-4, 5);
       ctx.fill();
       ctx.restore();
     }
 
-    this.drawVignette(ctx, vw, vh, frac, realTime);
-    if (joy.active) this.drawJoystick(ctx, joy);
+    if (joy.active) {
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(joy.ox, joy.oy, 26, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(joy.x, joy.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  /** Builds the soft overlays that depend on the view size. */
+  private prepare(vw: number, vh: number) {
+    const key = vw + "x" + vh;
+    if (key === this.sizeKey) return;
+    this.sizeKey = key;
+    const radial = (w: number, h: number, inner: number, stops: [number, string][]) => {
+      const c = document.createElement("canvas");
+      c.width = Math.ceil(w);
+      c.height = Math.ceil(h);
+      const x = c.getContext("2d")!;
+      const grd = x.createRadialGradient(w / 2, h / 2, inner, w / 2, h / 2, Math.hypot(w, h) / 2);
+      for (const [o, col] of stops) grd.addColorStop(o, col);
+      x.fillStyle = grd;
+      x.fillRect(0, 0, c.width, c.height);
+      return c;
+    };
+    this.dark = radial(vw, vh, Math.min(vw, vh) * 0.3, [[0, "rgba(8,6,24,0)"], [1, "rgba(8,6,24,0.62)"]]);
+    this.red = radial(vw, vh, Math.min(vw, vh) * 0.42, [[0, "rgba(210,20,40,0)"], [1, "rgba(210,20,40,0.7)"]]);
+    const l = document.createElement("canvas");
+    l.width = 80;
+    l.height = 64;
+    const x = l.getContext("2d")!;
+    const grd = x.createRadialGradient(40, 32, 2, 40, 32, 40);
+    grd.addColorStop(0, "rgba(150,170,255,0.5)");
+    grd.addColorStop(0.5, "rgba(110,130,230,0.2)");
+    grd.addColorStop(1, "rgba(90,110,220,0)");
+    x.fillStyle = grd;
+    x.fillRect(0, 0, 80, 64);
+    this.light = l;
   }
 
   private ball(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, light: string, dark: string, R: R, camX: number, camY: number) {
-    ctx.fillStyle = OUTLINE;
-    ctx.beginPath();
-    ctx.arc(R(x - camX), R(y - camY), r + 1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = dark;
-    ctx.beginPath();
-    ctx.arc(R(x - camX), R(y - camY), r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = light;
-    ctx.beginPath();
-    ctx.arc(R(x - 0.6 - camX), R(y - 0.6 - camY), r * 0.65, 0, Math.PI * 2);
-    ctx.fill();
+    for (const [rr, col, off] of [[r + 1, OUTLINE, 0], [r, dark, 0], [r * 0.65, light, -0.6]] as const) {
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(R(x + off - camX), R(y + off - camY), rr, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   private heart(ctx: CanvasRenderingContext2D, x: number, y: number, R: R, camX: number, camY: number) {
@@ -439,7 +475,7 @@ export class Renderer {
 
   private rings = new Map<string, HTMLCanvasElement>();
   /** A crisp pixel ring, cached by radius and color theme. */
-  private ringSprite(r: number, theme: Theme): HTMLCanvasElement {
+  private ringSprite(r: number, theme: RingTheme): HTMLCanvasElement {
     const key = theme + r;
     let c = this.rings.get(key);
     if (c) return c;
@@ -469,11 +505,11 @@ export class Renderer {
     return c;
   }
 
-  private bolts = new WeakMap<object, [number, number][]>();
+  private jag = new WeakMap<object, [number, number][]>();
   /** A jagged lightning path through the hit points, re-jittered a few times while it lives. */
   private boltPath(pts: [number, number][], t: number): [number, number][] {
     const step = Math.floor(t / 0.05);
-    const cached = this.bolts.get(pts);
+    const cached = this.jag.get(pts);
     if (cached && (cached as unknown as { step: number }).step === step) return cached;
     const out: [number, number][] = [pts[0]];
     for (let i = 1; i < pts.length; i++) {
@@ -490,23 +526,22 @@ export class Renderer {
       out.push(pts[i]);
     }
     (out as unknown as { step: number }).step = step;
-    this.bolts.set(pts, out);
+    this.jag.set(pts, out);
     return out;
   }
 
-  private blobs = new Map<string, HTMLCanvasElement>();
-  /** Puddles, fire patches and icy ground: an organic blob, cached by size and theme. */
-  private drawGround(ctx: CanvasRenderingContext2D, f: Flames, R: R, camX: number, camY: number, realTime: number) {
+  private blobs = new Map<number, HTMLCanvasElement>();
+  /** A poison puddle: an organic blob, cached by size. */
+  private drawPuddle(ctx: CanvasRenderingContext2D, f: Puddle, R: R, camX: number, camY: number, realTime: number) {
     const r = Math.round(f.r);
-    const key = f.theme + r;
-    let c = this.blobs.get(key);
+    let c = this.blobs.get(r);
     if (!c) {
       const ry = Math.round(r * 0.7);
       c = document.createElement("canvas");
       c.width = r * 2 + 4;
       c.height = ry * 2 + 4;
       const x = c.getContext("2d")!;
-      const ramp = GROUND_RAMPS[f.theme];
+      const ramp = ["#0c2010", "#173d1c", "#2a6a26", "#4a9a30", "#8ad850", "#d0f890"];
       const lobes = [[0, 0, 0.8], [-0.42, 0.12, 0.55], [0.45, -0.1, 0.55], [0.1, 0.38, 0.5], [-0.15, -0.35, 0.5]];
       const field = (u: number, v: number) => Math.max(...lobes.map(([lx, ly, lr]) => 1 - Math.hypot(u - lx, v - ly) / lr));
       for (let j = 0; j < c.height; j++)
@@ -519,98 +554,47 @@ export class Renderer {
           x.fillStyle = fv < 0.08 ? ramp[0] : fv < 0.18 ? ramp[1] : shine ? ramp[4] : fv > 0.55 ? ramp[3] : ramp[2];
           x.fillRect(i, j, 1, 1);
         }
-      if (this.blobs.size > 200) this.blobs.clear();
-      this.blobs.set(key, c);
+      this.blobs.set(r, c);
     }
     const life = f.t / f.dur;
     const sc = life < 0.08 ? life / 0.08 : 1;
-    const fiery = f.theme === "fire" || f.theme === "green";
-    ctx.globalAlpha = (life > 0.8 ? (1 - life) / 0.2 : 1) * (fiery ? 0.55 : 0.75);
+    ctx.globalAlpha = (life > 0.8 ? (1 - life) / 0.2 : 1) * 0.8;
     const w = c.width * sc;
     const h = c.height * sc;
     ctx.drawImage(c, R(f.x - w / 2 - camX), R(f.y - h / 2 - camY), w, h);
-    // Bubbles in puddles, licks of flame on fire, sparkles on ice
-    const ramp = GROUND_RAMPS[f.theme];
     for (let i = 0; i < 4; i++) {
-      const ph = (realTime * (fiery ? 2.5 : 1.3) + i * 0.27 + f.x * 0.01) % 1;
+      const ph = (realTime * 1.3 + i * 0.27 + f.x * 0.01) % 1;
       const a = i * 2.1 + f.y;
-      const bx = f.x + Math.cos(a) * f.r * 0.5;
-      const by = f.y + Math.sin(a) * f.r * 0.3 - ph * (fiery ? 8 : 3);
-      ctx.fillStyle = ph < 0.8 ? ramp[5] : ramp[4];
+      ctx.fillStyle = ph < 0.8 ? "#d0f890" : "#8ad850";
       const sz = ph < 0.6 ? 2 : 1;
-      ctx.fillRect(R(bx - camX), R(by - camY), sz, sz);
+      ctx.fillRect(R(f.x + Math.cos(a) * f.r * 0.5 - camX), R(f.y + Math.sin(a) * f.r * 0.3 - ph * 3 - camY), sz, sz);
     }
     ctx.globalAlpha = 1;
   }
 
-  /** A path of fire or poison: thick near you, thinning and fading behind. */
-  private drawTrail(ctx: CanvasRenderingContext2D, tr: { theme: Theme; pts: { x: number; y: number; t: number }[] }, now: number, R: R, camX: number, camY: number, realTime: number) {
-    const pts = tr.pts;
-    if (pts.length < 2) return;
-    const fiery = tr.theme === "fire" || tr.theme === "green";
-    const cols = tr.theme === "toxic" ? ["#173d1c", "#3f8a2a", "#9ae04a"] : tr.theme === "green" ? ["#123a14", "#3f9a36", "#b8f070"] : ["#6e1a0a", "#e0501a", "#ffb030"];
-    ctx.lineCap = "round";
-    for (let layer = 0; layer < 3; layer++) {
-      for (let i = 1; i < pts.length; i++) {
-        const a = pts[i - 1];
-        const b = pts[i];
-        const age = (now - b.t) / 2.5;
-        const life = Math.max(0, 1 - age);
-        const flick = fiery ? 0.8 + Math.sin(realTime * 18 + i * 1.7) * 0.2 : 1;
-        ctx.globalAlpha = Math.min(1, life * 1.6) * (layer === 0 ? 0.7 : layer === 1 ? 0.85 : 0.9);
-        ctx.strokeStyle = cols[layer];
-        ctx.lineWidth = Math.max(1, [8, 5, 1.5][layer] * (0.4 + life * 0.6) * flick);
-        ctx.beginPath();
-        ctx.moveTo(R(a.x - camX), R(a.y - camY));
-        ctx.lineTo(R(b.x - camX), R(b.y - camY));
-        ctx.stroke();
-      }
-    }
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
-    // Licks of flame or bubbles rising off the path
-    const lick = fiery ? (tr.theme === "green" ? ["#e0ffb0", "#8ad850", "#3f9a36"] : ["#fff0a0", "#ffa424", "#e0501a"]) : cols;
-    for (let i = 0; i < pts.length; i++) {
-      for (let k = 0; k < (fiery ? 2 : 1); k++) {
-        if (!fiery && i % 3) continue;
-        const pt = pts[i];
-        const ph = (realTime * (fiery ? 2.8 : 2.2) + i * 0.37 + k * 0.5) % 1;
-        const life = Math.max(0, 1 - (now - pt.t) / 2.5);
-        ctx.globalAlpha = (1 - ph) * life;
-        ctx.fillStyle = lick[ph < 0.3 ? 0 : ph < 0.65 ? 1 : 2];
-        const sz = ph < 0.4 ? 2 : 1;
-        const fx = R(pt.x + Math.sin(i * 3.1 + k * 2) * 3.5 - camX);
-        const fy = R(pt.y - ph * (fiery ? 9 + life * 5 : 4) - camY);
-        // A little tongue of flame: wider at the bottom
-        ctx.fillRect(fx, fy, sz, sz + (fiery && ph < 0.5 ? 2 : 0));
-      }
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  private drawHole(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, t: number, dur: number, R: R, camX: number, camY: number, realTime: number) {
+  /** A whirlpool: dark water with pale swirling arms. */
+  private drawPool(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, t: number, dur: number, R: R, camX: number, camY: number, realTime: number) {
     const grow = Math.min(1, t / 0.3) * (t > dur - 0.2 ? Math.max(0, (dur - t) / 0.2) : 1);
-    const rr = r * 0.32 * grow;
+    const rr = r * grow;
     const cx = R(x - camX);
     const cy = R(y - camY);
-    ctx.globalAlpha = 0.25;
-    ctx.fillStyle = "#64309a";
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, rr * 2.4, rr * 1.8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "#0a0614";
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = "#16306a";
     ctx.beginPath();
     ctx.ellipse(cx, cy, rr, rr * 0.75, 0, 0, Math.PI * 2);
     ctx.fill();
-    // Swirling arms
-    ctx.strokeStyle = "#a070ff";
-    ctx.lineWidth = 1;
-    for (let k = 0; k < 3; k++) {
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = "#0a1434";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rr * 0.3, rr * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    for (let k = 0; k < 4; k++) {
+      ctx.strokeStyle = k % 2 ? "#c0e4ff" : "#6ab8ff";
       ctx.beginPath();
-      for (let s = 0; s <= 12; s++) {
-        const a = realTime * 5 + (k * Math.PI * 2) / 3 + s * 0.35;
-        const d = rr * (0.3 + s * 0.09);
+      for (let s = 0; s <= 14; s++) {
+        const a = realTime * 5 + (k * Math.PI) / 2 + s * 0.3;
+        const d = rr * (0.25 + s * 0.052);
         const px = cx + Math.cos(a) * d;
         const py = cy + Math.sin(a) * d * 0.75;
         if (s) ctx.lineTo(px, py);
@@ -618,6 +602,39 @@ export class Renderer {
       }
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Fire Path: thick near you, thinning and fading behind. */
+  private drawPath(ctx: CanvasRenderingContext2D, pts: { x: number; y: number; t: number }[], now: number, R: R, camX: number, camY: number, realTime: number) {
+    if (pts.length < 2) return;
+    const cols = ["#6e1a0a", "#e0501a", "#ffb030"];
+    ctx.lineCap = "round";
+    for (let layer = 0; layer < 3; layer++)
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1];
+        const b = pts[i];
+        const life = Math.max(0, 1 - (now - b.t) / 2.5);
+        ctx.globalAlpha = Math.min(1, life * 1.6) * (layer === 0 ? 0.7 : 0.9);
+        ctx.strokeStyle = cols[layer];
+        ctx.lineWidth = Math.max(1, [8, 5, 1.5][layer] * (0.4 + life * 0.6) * (0.8 + Math.sin(realTime * 18 + i * 1.7) * 0.2));
+        ctx.beginPath();
+        ctx.moveTo(R(a.x - camX), R(a.y - camY));
+        ctx.lineTo(R(b.x - camX), R(b.y - camY));
+        ctx.stroke();
+      }
+    const lick = ["#fff0a0", "#ffa424", "#e0501a"];
+    for (let i = 0; i < pts.length; i++)
+      for (let k = 0; k < 2; k++) {
+        const pt = pts[i];
+        const ph = (realTime * 2.8 + i * 0.37 + k * 0.5) % 1;
+        const life = Math.max(0, 1 - (now - pt.t) / 2.5);
+        ctx.globalAlpha = (1 - ph) * life;
+        ctx.fillStyle = lick[ph < 0.3 ? 0 : ph < 0.65 ? 1 : 2];
+        const sz = ph < 0.4 ? 2 : 1;
+        ctx.fillRect(R(pt.x + Math.sin(i * 3.1 + k * 2) * 3.5 - camX), R(pt.y - ph * (9 + life * 5) - camY), sz, sz + (ph < 0.5 ? 2 : 0));
+      }
+    ctx.globalAlpha = 1;
   }
 
   private shadow(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, R: R, camX: number, camY: number) {
@@ -625,172 +642,96 @@ export class Renderer {
     ctx.drawImage(s, R(x - w / 2 - camX), R(y - s.height / 2 - camY));
   }
 
-  private heroSprite(g: Game, realTime: number): Sprite {
-    const p = g.player;
-    const frames = p.moving ? this.art.heroWalk : this.art.heroIdle;
-    return frames[Math.floor(p.moving ? p.walkT * 11 : realTime * 2.5) % frames.length];
-  }
-
   private drawPlayer(ctx: CanvasRenderingContext2D, g: Game, R: R, camX: number, camY: number, realTime: number) {
     const p = g.player;
     const A = this.art;
-    if (p.under > 0) {
-      // Underground: just a mound of dirt with two ears poking out
-      ctx.fillStyle = "#4e3430";
-      ctx.beginPath();
-      ctx.ellipse(R(p.x - camX), R(p.y - camY), 9, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#9c7656";
-      ctx.fillRect(R(p.x - 5 - camX), R(p.y - 3 - camY), 10, 2);
-      ctx.fillStyle = "#f3edf5";
-      ctx.fillRect(R(p.x - 3 - camX), R(p.y - 9 - camY), 2, 6);
-      ctx.fillRect(R(p.x + 1 - camX), R(p.y - 8 - camY), 2, 5);
-      return;
-    }
     const blinking = p.inv > 0 && Math.floor(p.inv * 14) % 2 === 0;
-    const flash = p.inv > CFG.player.iframes - 0.08;
-    // Staff orb glow
+    const flash = p.inv > CFG.player.iframes - 0.08 && p.inv <= CFG.player.iframes;
     ctx.globalCompositeOperation = "lighter";
-    ctx.globalAlpha = 0.35 + Math.sin(realTime * 5) * 0.12;
-    const og = A.orbGlow;
+    ctx.globalAlpha = 0.5 + Math.sin(realTime * 5) * 0.12;
+    const og = A.moonGlow;
     ctx.drawImage(og, R(p.x + 9 * p.face - og.width / 2 - camX), R(p.y - 24 - og.height / 2 - camY));
-    if (g.fullMoon) {
-      ctx.globalAlpha = 0.35;
-      const mg = A.moonGlow;
-      ctx.drawImage(mg, R(p.x - mg.width - camX), R(p.y - 14 - mg.height - camY), mg.width * 2, mg.height * 2);
-    }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
-    if (p.ward > 0) {
-      const pulse = Math.sin(realTime * 10) * 1.5;
-      const fading = p.ward < 1 && Math.floor(realTime * 10) % 2 === 0;
-      if (!fading) {
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = "rgba(70,214,240,0.16)";
-        ctx.strokeStyle = "rgba(198,251,255,0.8)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(R(p.x - camX), R(p.y - 12 - camY), 20 + pulse, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.globalCompositeOperation = "source-over";
-      }
-    }
     if (blinking && !g.over) return;
-    const s = this.heroSprite(g, realTime);
+    const frames = p.moving ? A.heroWalk : A.heroIdle;
+    const s = frames[Math.floor(p.moving ? p.walkT * 11 : realTime * 2.5) % frames.length];
     const c = p.face < 0 ? (flash ? s.fl : s.nl) : flash ? s.f : s.n;
     ctx.drawImage(c, R(p.x - s.w / 2 - camX), R(p.y - s.h + 3 - camY));
-  }
-
-  /** A see-through mirror image of the bunny. */
-  private drawEcho(ctx: CanvasRenderingContext2D, e: { x: number; y: number }, g: Game, R: R, camX: number, camY: number, realTime: number) {
-    const s = this.heroSprite(g, realTime);
-    const c = tinted(g.player.face < 0 ? s.n : s.nl, "rgba(150,210,255,0.6)");
-    ctx.globalAlpha = 0.55 + Math.sin(realTime * 4 + e.x) * 0.1;
-    ctx.drawImage(c, R(e.x - s.w / 2 - camX), R(e.y - s.h + 3 - camY));
-    ctx.globalAlpha = 1;
-  }
-
-  private drawTotem(ctx: CanvasRenderingContext2D, tt: Totem, g: Game, R: R, camX: number, camY: number, realTime: number) {
-    const A = this.art;
-    let frames: Sprite[];
-    if (tt.kind === "snow") frames = g.has("yeti") ? A.yeti : A.snowman;
-    else frames = g.has("wicker") ? A.wicker : A.totem;
-    const s = frames[(Math.floor(realTime * 6 + Math.abs(tt.x)) % frames.length + frames.length) % frames.length];
-    const rise = Math.min(1, tt.t / 0.25);
-    const fade = tt.t > tt.dur - 1 && Math.floor(realTime * 10) % 2 === 0;
-    if (fade) ctx.globalAlpha = 0.5;
-    const h = Math.round(s.h * rise);
-    ctx.drawImage(s.n, 0, 0, s.w, h, R(tt.x - s.w / 2 - camX), R(tt.y - h + 3 - camY), s.w, h);
-    ctx.globalAlpha = 1;
-    if (tt.kind === "snow" && tt.hp < tt.maxHp) {
-      const bw = 14;
-      const bx = R(tt.x - bw / 2 - camX);
-      const by = R(tt.y - s.h - camY);
-      ctx.fillStyle = OUTLINE;
-      ctx.fillRect(bx - 1, by - 1, bw + 2, 3);
-      ctx.fillStyle = "#8fd8ff";
-      ctx.fillRect(bx, by, Math.ceil((bw * Math.max(0, tt.hp)) / tt.maxHp), 1);
-    }
   }
 
   private drawEnemy(ctx: CanvasRenderingContext2D, e: Enemy, g: Game, R: R, camX: number, camY: number, realTime: number) {
     const A = this.art;
     const t = g.time;
-    let frames: Sprite[];
+    let frames: Sprite[] = A.slime;
     let speed = 8;
     let lift = 0;
-    switch (e.kind) {
-      case "bat":
-        frames = A.bat;
-        speed = 10;
-        lift = 10 + Math.sin(t * 3 + e.phase) * 2;
-        break;
-      case "skel":
-        frames = A.skel;
-        speed = 6;
-        break;
-      case "king":
-        frames = A.king;
-        speed = 5;
-        break;
-      case "jelly":
-        frames = A.jelly;
-        speed = 6;
-        break;
-      case "ghost":
-        frames = A.ghost;
-        speed = 6;
-        lift = 4;
-        break;
-      case "shroom":
-        frames = e.flash > 0.04 && e.aiT > 2 ? [A.shroomSpit] : A.shroom;
-        speed = 6;
-        break;
-      case "boar":
-        frames = e.ai === 1 ? A.boarStamp : A.boar;
-        speed = e.ai === 2 ? 16 : e.ai === 1 ? 14 : 7;
-        break;
-      case "golem":
-        frames = A.golem;
-        speed = 4;
-        break;
-      default:
-        frames = A.slime;
+    if (e.kind === "bat") {
+      frames = A.bat;
+      speed = 10;
+      lift = 10 + Math.sin(t * 3 + e.phase) * 2;
+    } else if (e.kind === "skel") {
+      frames = A.skel;
+      speed = 6;
+    } else if (e.kind === "king") {
+      frames = A.king;
+      speed = 5;
+      lift = Math.abs(Math.sin(t * 3)) * 3;
+    } else if (e.kind === "jelly") {
+      frames = A.jelly;
+      speed = 6;
+    } else if (e.kind === "ghost") {
+      frames = A.ghost;
+      speed = 6;
+      lift = 4;
+    } else if (e.kind === "shroom") {
+      frames = e.flash > 0.04 && e.aiT > 2 ? [A.shroomSpit] : A.shroom;
+      speed = 6;
+    } else if (e.kind === "boar") {
+      frames = e.ai === 1 ? A.boarStamp : A.boar;
+      speed = e.ai === 2 ? 16 : e.ai === 1 ? 14 : 7;
+    } else if (e.kind === "golem") {
+      frames = A.golem;
+      speed = 4;
     }
-    const still = e.freezeT > 0 || g.timeStop > 0;
+    const still = e.freezeT > 0 || e.stunT > 0;
     const s = frames[still ? 0 : Math.floor(t * speed + e.phase * 3) % frames.length];
     // Sprites face right; mirror them when heading left
     const left = e.kind === "boar" && e.ai === 2 ? e.dirX < 0 : e.charmT > 0 ? e.kx < 0 : g.player.x < e.x;
     let c = e.flash > 0 ? (left ? s.fl : s.f) : left ? s.nl : s.n;
     if (e.flash <= 0) {
-      if (e.freezeT > 0 || e.chillT > 0) c = tinted(c, "rgba(120,200,255,0.5)");
-      else if (e.charmT > 0) c = tinted(c, e.allySrc === "Heart Charm" ? "rgba(255,128,192,0.45)" : "rgba(200,240,255,0.55)");
+      if (e.freezeT > 0) c = tinted(c, "rgba(170,225,255,0.75)");
+      else if (e.chillT > 0) c = tinted(c, "rgba(120,200,255,0.45)");
+      else if (e.charmT > 0) c = tinted(c, "rgba(255,128,192,0.45)");
+      else if (e.boss === 1) c = tinted(c, "rgba(120,60,200,0.5)");
     }
     const shakeX = e.kind === "boar" && e.ai === 1 ? Math.round(Math.sin(realTime * 60)) : 0;
-    const dx = R(e.x - s.w / 2 - camX) + shakeX;
-    const dy = R(e.y - s.h + 3 - lift - camY);
+    const big = e.boss === 1 ? 1.25 : 1;
+    const w = Math.round(s.w * big);
+    const h = Math.round(s.h * big);
+    const dx = R(e.x - w / 2 - camX) + shakeX;
+    const dy = R(e.y - h + 3 - lift - camY);
     if (e.elite) {
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = 0.45 + Math.sin(realTime * 5) * 0.15;
       const gg = A.goldGlow;
-      ctx.drawImage(gg, R(e.x - gg.width - camX), R(e.y - s.h / 2 - gg.height - camY), gg.width * 2, gg.height * 2);
+      ctx.drawImage(gg, R(e.x - gg.width / 2 - camX), R(e.y - s.h / 2 - gg.height / 2 - camY));
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = "source-over";
       ctx.drawImage(outlined(left ? s.nl : s.n, "#ffd640"), dx - 1, dy - 1);
     }
-    if (e.kind === "ghost" && e.charmT <= 0) ctx.globalAlpha = 0.82;
-    ctx.drawImage(c, dx, dy);
+    if (e.kind === "ghost" && e.charmT <= 0) ctx.globalAlpha = 0.85;
+    ctx.drawImage(c, dx, dy, w, h);
     ctx.globalAlpha = 1;
     // Status marks over the head
-    const top = e.y - s.h - lift + 1;
-    if (e.dizzyT > 0 || e.stunT > 0) {
+    const top = e.y - h - lift + 1;
+    if (e.dizzyT > 0 || e.stunT > 0)
       for (let i = 0; i < 2; i++) {
         const a = realTime * 7 + i * Math.PI;
-        ctx.fillStyle = e.stunT > 0 ? "#ffe46a" : "#c8a0ff";
+        ctx.fillStyle = e.stunT > 0 ? "#ffe46a" : "#d8c8ff";
         ctx.fillRect(R(e.x + Math.cos(a) * 5 - camX), R(top + Math.sin(a) * 1.5 - camY), 2, 2);
       }
-    }
+    if (e.charmT > 0) this.heart(ctx, e.x, top - 4 + Math.sin(realTime * 5) * 1.5, R, camX, camY);
     if (e.kind === "boar" && e.ai === 1) {
       ctx.fillStyle = OUTLINE;
       ctx.fillRect(R(e.x - 1 - camX), R(top - 9 - camY), 4, 8);
@@ -798,60 +739,14 @@ export class Renderer {
       ctx.fillRect(R(e.x - camX), R(top - 8 - camY), 2, 4);
       ctx.fillRect(R(e.x - camX), R(top - 3 - camY), 2, 1);
     }
-    if (e.kind === "king" || e.elite) {
-      const bw = e.kind === "king" ? 30 : 18;
+    if (e.elite) {
+      const bw = 18;
       const bx = R(e.x - bw / 2 - camX);
-      const by = dy - 4;
       ctx.fillStyle = OUTLINE;
-      ctx.fillRect(bx - 1, by - 1, bw + 2, 4);
-      ctx.fillStyle = "#3a2410";
-      ctx.fillRect(bx, by, bw, 2);
+      ctx.fillRect(bx - 1, dy - 5, bw + 2, 4);
       ctx.fillStyle = "#ffd640";
-      ctx.fillRect(bx, by, Math.ceil((bw * Math.max(0, e.hp)) / e.maxHp), 2);
+      ctx.fillRect(bx, dy - 4, Math.ceil((bw * Math.max(0, e.hp)) / e.maxHp), 2);
     }
-  }
-
-  private drawVignette(ctx: CanvasRenderingContext2D, vw: number, vh: number, hpFrac: number, realTime: number) {
-    const key = vw + "x" + vh;
-    if (key !== this.vignetteKey) {
-      this.vignetteKey = key;
-      const make = (rgb: string, edge: number) => {
-        const c = document.createElement("canvas");
-        c.width = Math.ceil(vw);
-        c.height = Math.ceil(vh);
-        const x = c.getContext("2d")!;
-        const grd = x.createRadialGradient(vw / 2, vh / 2, Math.min(vw, vh) * 0.42, vw / 2, vh / 2, Math.hypot(vw, vh) / 2);
-        grd.addColorStop(0, `rgba(${rgb},0)`);
-        grd.addColorStop(1, `rgba(${rgb},${edge})`);
-        x.fillStyle = grd;
-        x.fillRect(0, 0, c.width, c.height);
-        return c;
-      };
-      this.vignette = make("20,13,28", 0.42);
-      this.redVignette = make("210,20,40", 0.7);
-    }
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(this.vignette!, 0, 0, vw, vh);
-    if (hpFrac < 0.3) {
-      ctx.globalAlpha = Math.min(1, (0.3 - hpFrac) * 4) * (0.55 + Math.sin(realTime * 6) * 0.35);
-      ctx.drawImage(this.redVignette!, 0, 0, vw, vh);
-      ctx.globalAlpha = 1;
-    }
-    ctx.imageSmoothingEnabled = false;
-  }
-
-  private drawJoystick(ctx: CanvasRenderingContext2D, j: Joystick) {
-    ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.arc(j.ox, j.oy, 26, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.arc(j.x, j.y, 10, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
   }
 }
 
@@ -874,15 +769,16 @@ function shadowW(e: Enemy) {
 }
 
 const NUMBER_COLORS: Record<DamageNumber["style"], [string, string]> = {
-  hit: ["#ffffff", "#c8c8dc"],
+  moon: ["#ffffff", "#c0c8f0"],
+  none: ["#ffffff", "#c0c8f0"],
+  fire: ["#ffb040", "#f05a1a"],
+  frost: ["#d0f0ff", "#50b8f0"],
+  storm: ["#fff8a0", "#ffd640"],
+  poison: ["#c8f080", "#7ad040"],
+  crit: ["#ffe46a", "#ff7a1a"],
   big: ["#ffe46a", "#ffa424"],
-  burn: ["#ffa424", "#f05a1a"],
-  green: ["#c8f080", "#5ac040"],
   heal: ["#ffd0f0", "#e080b0"],
-  max: ["#ffe46a", "#ffa424"],
-  ice: ["#d0f0ff", "#50b8f0"],
-  zap: ["#fff8a0", "#ffd640"],
-  toxic: ["#c8f080", "#7ad040"],
+  roll: ["#ffe46a", "#ffa424"],
 };
 
 const tintCache = new Map<string, WeakMap<HTMLCanvasElement, HTMLCanvasElement>>();
@@ -918,28 +814,5 @@ function outlined(src: HTMLCanvasElement, color: string): HTMLCanvasElement {
   x.fillStyle = color;
   x.fillRect(0, 0, c.width, c.height);
   outlineCache.set(src, c);
-  return c;
-}
-
-const greenCache = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
-/** Fire recolored green for Verdant Flame. */
-function greenFire(src: HTMLCanvasElement): HTMLCanvasElement {
-  let c = greenCache.get(src);
-  if (c) return c;
-  c = document.createElement("canvas");
-  c.width = src.width;
-  c.height = src.height;
-  const x = c.getContext("2d")!;
-  x.drawImage(src, 0, 0);
-  const d = x.getImageData(0, 0, c.width, c.height);
-  for (let i = 0; i < d.data.length; i += 4) {
-    const r = d.data[i];
-    const gch = d.data[i + 1];
-    d.data[i] = Math.round(gch * 0.6);
-    d.data[i + 1] = Math.min(255, Math.round(r * 0.95 + 20));
-    d.data[i + 2] = Math.round(d.data[i + 2] * 0.5);
-  }
-  x.putImageData(d, 0, 0);
-  greenCache.set(src, c);
   return c;
 }
